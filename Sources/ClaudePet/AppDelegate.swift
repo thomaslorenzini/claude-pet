@@ -137,6 +137,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         server.stateProvider = { [unowned self] in
             var snapshot = self.tracker.snapshot()
             snapshot["port"] = self.server.port.map { Int($0) } ?? NSNull()
+            // What the pet actually shows (a click's wave wins over the tracker's state).
+            snapshot["shown"] = self.shownDisplay().state.rawValue
             snapshot["quotas"] = self.quotas.snapshot()
             snapshot["usage_api"] = self.usageAPI.status
             snapshot["usage_token_expires_at"] = self.usageAPI.tokenExpiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
@@ -189,10 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refresh() {
-        var display = tracker.display()
-        if let until = wavingUntil, Date() < until, display.state == .idle || display.state == .sleeping {
-            display = (.waving, nil)
-        }
+        let display = shownDisplay()
         pet.update(state: display.state, tool: display.tool)
         let leader = tracker.leader
         pet.updateGauges(quotas.gauges(
@@ -203,11 +202,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scheduleWake()
     }
 
-    /// Clicking the sleeping pet (or its picture in the panel) wakes it: it says hello, then falls asleep
-    /// again 10 s later if nothing happens.
+    /// What the pet shows: the tracker's state, unless a click made it wave, which wins for a moment
+    /// whatever Claude is doing.
+    private func shownDisplay() -> (state: PetState, tool: ToolKind?) {
+        if let until = wavingUntil, Date() < until { return (.waving, nil) }
+        return tracker.display()
+    }
+
+    /// A click on the pet (or its picture in the panel) makes it say hello, then it goes back to its
+    /// state. Asleep, it wakes up and falls asleep again 10 s later if nothing happens.
     private func wakeUp() {
-        guard tracker.display().state == .sleeping else { return }
-        tracker.poke()
+        if tracker.display().state == .sleeping { tracker.poke() }
         wavingUntil = Date().addingTimeInterval(Self.waveDuration)
         refresh()
     }
@@ -251,10 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func panelModel() -> ControlPanelView.Model {
         var m = ControlPanelView.Model()
-        var display = tracker.display()
-        if let until = wavingUntil, Date() < until, display.state == .idle || display.state == .sleeping {
-            display = (.waving, nil)
-        }
+        let display = shownDisplay()
         let leader = tracker.leader
         let folder = leader?.cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
         m.state = display.state
