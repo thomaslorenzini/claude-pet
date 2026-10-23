@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let tracker = SessionTracker()
     private let quotas = QuotaStore()
     private let usageAPI = OAuthUsageSource()
+    private let requests = RequestCenter()
     private var pet: PetController!
     private var server: EventServer!
     private var statusItem: NSStatusItem!
@@ -36,6 +37,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.refresh()
         }
         pet.show()
+        requests.onChange = { [unowned self] in
+            self.pet.showRequest(self.requests.current, waiting: max(0, self.requests.queue.count - 1))
+        }
+        pet.requestView.onAllow = { [unowned self] in self.requests.allow($0) }
+        pet.requestView.onDeny = { [unowned self] in self.requests.deny($0) }
+        pet.requestView.onAnswer = { [unowned self] in self.requests.answer($0, $1) }
+        pet.requestView.onDismiss = { [unowned self] in self.requests.dismiss($0) }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: "Claude Pet")
@@ -56,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         server.onEvent = { [unowned self] event in
             self.tracker.handle(event)
             if let id = event["session_id"] as? String {
+                self.requests.sessionMoved(id, event: event)
                 if event["hook_event_name"] as? String == "SessionEnd" {
                     self.quotas.forget(session: id)
                 } else if let transcript = event["transcript_path"] as? String {
@@ -73,6 +82,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         usageAPI.start()
 
+        server.onAsk = { [unowned self] payload, respond in
+            // The permission hook is the blocking one now: it also tells the tracker Claude waits.
+            if payload["hook_event_name"] as? String == "PermissionRequest" {
+                self.tracker.handle(payload)
+                self.refresh()
+            }
+            // Hidden pet: nobody would see it, leave it all to Claude's own dialog.
+            guard self.pet.isVisible else {
+                respond(nil)
+                return nil
+            }
+            return self.requests.add(payload, respond: respond)
+        }
+        server.onAskCancelled = { [unowned self] id in self.requests.cancel(id) }
+
         server.onStatus = { [unowned self] status in
             self.quotas.handleStatus(status)
             self.refresh()
@@ -83,6 +107,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let ear = (control["notch_ear"] as? Double).map { CGFloat($0) }
             if radius != nil || ear != nil { self.pet.tuneNotch(radius: radius, ear: ear) }
             if control["renew_usage_token"] as? Bool == true { self.usageAPI.renewNow() }
+            // Tests: open or close the request panel as a hover would.
+            if let reveal = control["reveal"] as? Bool { self.pet.revealRequest(reveal) }
+            // Tests: renders the pet's windows to PNG, even with the display asleep.
+            if let path = control["snapshot"] as? String { self.pet.snapshot(to: path) }
+            // Tests: presses a request button by its title, as a click would.
+            if let title = control["press"] as? String { self.pet.requestView.press(title) }
+            if let text = control["type"] as? String { self.pet.requestView.typeOther(text) }
         }
         server.stateProvider = { [unowned self] in
             var snapshot = self.tracker.snapshot()
@@ -92,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             snapshot["usage_token_expires_at"] = self.usageAPI.tokenExpiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
             snapshot["notch"] = self.pet.mode != .floating
             snapshot["click_through"] = self.pet.panel.ignoresMouseEvents
+            snapshot["requests"] = self.requests.queue.map { ["id": $0.id, "session": $0.session, "tool": $0.tool] }
             snapshot["notch_radius"] = Double(NotchGeometry.bottomRadius)
             snapshot["notch_ear"] = Double(NotchGeometry.earRadius)
             return snapshot

@@ -8,6 +8,8 @@ import Network
 ///
 /// - `POST /event`: body is a JSON object (the Claude Code hook stdin as-is, or anything with
 ///   `hook_event_name` / `pet_state`). Always answers 200 quickly.
+/// - `POST /ask`: a blocking hook (permission, question). The connection stays open until the user
+///   answers in the pet; the response body is the hook's output, empty for no decision.
 /// - `POST /control`: app settings, e.g. `{"notch": true}`.
 /// - `POST /status`: the Claude Code status line JSON, forwarded by the status line bridge.
 /// - `GET /state`: current aggregated state, for debugging.
@@ -15,6 +17,11 @@ final class EventServer {
     static let maxBodySize = 32 * 1024 * 1024
 
     var onEvent: (([String: Any]) -> Void)?
+    /// `POST /ask`, on the main queue: the payload and a one-shot `respond` (any queue). Returns an id
+    /// for `onAskCancelled`, or nil once answered already.
+    var onAsk: (([String: Any], @escaping (Data?) -> Void) -> Int?)?
+    /// The asking hook went away before an answer (killed because the user answered elsewhere).
+    var onAskCancelled: ((Int) -> Void)?
     /// `POST /control`, e.g. `{"notch": true}`.
     var onControl: (([String: Any]) -> Void)?
     /// `POST /status`: the Claude Code status line JSON (quotas, context window).
@@ -33,6 +40,8 @@ final class EventServer {
     private(set) var port: UInt16?
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "claude-pet.server")
+    /// Connections held open by `/ask`, exempt from the 5 s limit. Server queue only.
+    private var held = Set<ObjectIdentifier>()
 
     init(preferredPort: UInt16) {
         self.preferredPort = preferredPort
@@ -117,7 +126,10 @@ final class EventServer {
 
     private func serve(_ connection: NWConnection) {
         connection.start(queue: queue)
-        queue.asyncAfter(deadline: .now() + 5) { connection.cancel() }
+        queue.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard self?.held.contains(ObjectIdentifier(connection)) != true else { return }
+            connection.cancel()
+        }
         receive(on: connection, buffer: Data())
     }
 
@@ -152,6 +164,12 @@ final class EventServer {
             }
             DispatchQueue.main.async { self.onEvent?(object) }
             send(status: "200 OK", body: #"{"ok":true}"#, on: connection)
+        case ("POST", "/ask"):
+            guard let object = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any] else {
+                send(status: "400 Bad Request", body: #"{"ok":false,"error":"expected a JSON object"}"#, on: connection)
+                return
+            }
+            hold(connection, for: object)
         case ("POST", "/control"), ("POST", "/status"):
             guard let object = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any] else {
                 send(status: "400 Bad Request", body: #"{"ok":false,"error":"expected a JSON object"}"#, on: connection)
@@ -175,8 +193,39 @@ final class EventServer {
         }
     }
 
+    /// Keeps an `/ask` connection open until `respond`, or until the hook closes it.
+    private func hold(_ connection: NWConnection, for payload: [String: Any]) {
+        let key = ObjectIdentifier(connection)
+        held.insert(key)
+        var answered = false
+        let respond: (Data?) -> Void = { [weak self] data in
+            self?.queue.async {
+                guard let self, !answered else { return }
+                answered = true
+                self.held.remove(key)
+                self.send(status: "200 OK", body: data ?? Data(), on: connection)
+            }
+        }
+        DispatchQueue.main.async {
+            guard let id = self.onAsk?(payload, respond) else { return }
+            self.queue.async {
+                // The hook sends nothing more: the read only completes when it closes the connection.
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { _, _, isComplete, error in
+                    guard !answered, isComplete || error != nil else { return }
+                    answered = true
+                    self.held.remove(key)
+                    connection.cancel()
+                    DispatchQueue.main.async { self.onAskCancelled?(id) }
+                }
+            }
+        }
+    }
+
     private func send(status: String, body: String, on connection: NWConnection) {
-        let bodyData = Data(body.utf8)
+        send(status: status, body: Data(body.utf8), on: connection)
+    }
+
+    private func send(status: String, body bodyData: Data, on connection: NWConnection) {
         var response = Data("HTTP/1.1 \(status)\r\nContent-Type: application/json\r\nContent-Length: \(bodyData.count)\r\nConnection: close\r\n\r\n".utf8)
         response.append(bodyData)
         connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })

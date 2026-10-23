@@ -31,7 +31,13 @@ ORIGINAL = os.path.join(SUPPORT_DIR, "statusline-original")
 ENDPOINT = "$HOME/Library/Application Support/claude-pet/endpoint"
 
 # Events whose matcher filters on tool name; the others take no matcher.
-TOOL_EVENTS = ["PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"]
+TOOL_EVENTS = ["PreToolUse", "PostToolUse", "PostToolUseFailure"]
+# Blocking hooks, answered from the pet: (event, matcher). AskUserQuestion goes through
+# PermissionRequest too, while Claude's own dialog shows (a PreToolUse hook would hold it back).
+ASK_HOOKS = [("PermissionRequest", "*")]
+# Claude Code keeps the first decision and kills the other hooks: answering in the terminal, in
+# Claude Desktop or in another app (Vibe Island) ends ours. The limit only matters if nobody answers.
+ASK_TIMEOUT = 86400
 OTHER_EVENTS = [
     "SessionStart",
     "SessionEnd",
@@ -56,6 +62,17 @@ def hook_command():
         f"/bin/sh -c 'f=\"{ENDPOINT}\"; read -r port pid < \"$f\" 2>/dev/null && kill -0 \"$pid\" 2>/dev/null && "
         "curl -s -m 1 --connect-timeout 0.2 -H \"Expect:\" -H \"Content-Type: application/json\" "
         f"--data-binary @- \"http://127.0.0.1:$port/event\" >/dev/null 2>&1; exit 0' {MARKER}"
+    )
+
+
+def ask_command():
+    # Blocks until the user answers in the pet, then prints the decision as the hook's output.
+    # Pet closed, no answer or any error: no output, so Claude Code goes on with its own dialog.
+    # -f: an error page must never be read as a decision.
+    return (
+        f"/bin/sh -c 'f=\"{ENDPOINT}\"; read -r port pid < \"$f\" 2>/dev/null && kill -0 \"$pid\" 2>/dev/null && "
+        f"curl -sf -m {ASK_TIMEOUT} --connect-timeout 0.2 -H \"Expect:\" -H \"Content-Type: application/json\" "
+        f"--data-binary @- \"http://127.0.0.1:$port/ask\" 2>/dev/null; exit 0' {MARKER}"
     )
 
 
@@ -95,6 +112,9 @@ def add_ours(settings):
         if event in TOOL_EVENTS:
             group = {"matcher": "*", **group}
         hooks.setdefault(event, []).append(group)
+    for event, matcher in ASK_HOOKS:
+        ask = {"type": "command", "command": ask_command(), "timeout": ASK_TIMEOUT}
+        hooks.setdefault(event, []).append({"matcher": matcher, "hooks": [ask]})
 
 
 def is_wrapped(settings):

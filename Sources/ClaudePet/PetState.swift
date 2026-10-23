@@ -135,6 +135,9 @@ final class SessionTracker {
             set(.idle)
         case "UserPromptSubmit", "PreCompact":
             set(.thinking)
+        case "PreToolUse" where toolName == "AskUserQuestion":
+            // Claude asks the user a question: it waits for them, like a permission.
+            set(.waiting)
         case "PreToolUse":
             set(.working, tool: ToolKind(toolName: toolName ?? ""))
         case "SubagentStart":

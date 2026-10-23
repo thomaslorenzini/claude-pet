@@ -132,6 +132,27 @@ de plusieurs Mo) arrivait *après* le `PreToolUse` suivant, et le pet affichait 
 Code attend la fin de chaque hook, donc l'ordre est garanti. Coût mesuré : ~10 ms par hook, ~30 ms pour 5 Mo,
 quasi nul si l'app est fermée (connexion refusée), 1 s au pire si l'app est bloquée.
 
+## Répondre à Claude depuis le pet
+
+Quand Claude demande une permission (lancer une commande, modifier un fichier…) ou te pose une question
+(`AskUserQuestion`), le pet te la montre et tu peux répondre sans retourner dans Claude.
+
+- **Encoche** : un bandeau « Claude a besoin de vous » sort sous l'encoche. Au survol, il s'ouvre en panneau autour
+  de l'encoche (à gauche, à droite et en dessous) avec la commande, le fichier ou la question, et les boutons. Le pet
+  reste à sa place, à droite.
+- **Flottant** : une pastille au-dessus du pet, qui s'ouvre en carte au survol ou au clic.
+- Une fois la demande ouverte, le bandeau ou la pastille ne revient pas : seul le pet reste en alerte (main levée,
+  « ! »). Survoler l'encoche, ou le pet en mode flottant, rouvre la demande. Une nouvelle demande refait apparaître
+  le bandeau.
+- Permission : **Autoriser** (une fois, jamais « toujours »), **Refuser** (Claude reçoit « Refusé par l'utilisateur
+  depuis Claude Pet. ») ou **Ignorer** (tu réponds dans Claude). Questions : un clic choisit (cases à cocher puis
+  **Valider** pour un choix multiple). **Autre** ouvre un champ pour taper ta propre réponse (Entrée pour valider) :
+  le pet prend le clavier seulement pendant la saisie. **Ignorer** laisse faire dans Claude.
+
+Claude Code affiche aussi son propre dialogue, questions comprises, et garde **la première réponse**, où qu'elle
+soit : pet, terminal, Desktop ou une autre app comme Vibe Island. La demande disparaît alors du pet. Pet fermé ou
+masqué : rien ne change, tout se passe dans Claude.
+
 ## États
 
 | Événement hook | État |

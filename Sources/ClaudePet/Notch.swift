@@ -28,6 +28,27 @@ struct Spring {
 
 func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { a + (b - a) * t }
 
+/// Progress moving at a constant speed towards its target, for animations eased in phases by the
+/// layout (a spring would spend most of its time on the last phase).
+struct Tween {
+    var value: CGFloat = 0
+    var target: CGFloat = 0
+    /// Seconds for the whole way from 0 to 1.
+    var duration: CGFloat
+
+    mutating func step(_ dt: CGFloat) {
+        let d = dt / duration
+        value = target > value ? min(target, value + d) : max(target, value - d)
+    }
+
+    var isSettled: Bool { value == target }
+}
+
+func lerp(_ a: CGRect, _ b: CGRect, _ t: CGFloat) -> CGRect {
+    CGRect(x: lerp(a.minX, b.minX, t), y: lerp(a.minY, b.minY, t),
+           width: lerp(a.width, b.width, t), height: lerp(a.height, b.height, t))
+}
+
 /// 0 below `edge0`, 1 above `edge1`, smooth in between.
 func smoothstep(_ edge0: CGFloat, _ edge1: CGFloat, _ x: CGFloat) -> CGFloat {
     let t = min(1, max(0, (x - edge0) / (edge1 - edge0)))
@@ -86,6 +107,67 @@ struct NotchGeometry {
         var expand: CGFloat
         /// Gauges fade in late in the hover expansion, once they have room.
         var gaugeAlpha: CGFloat
+        /// The box covers the notch from its left edge, with an ear on each side (a request is shown).
+        var spansNotch = false
+    }
+
+    /// Black box while Claude waits for an answer, and where its parts go (screen coordinates).
+    struct RequestLayout {
+        var box: Layout
+        /// "Claude a besoin de vous", under the notch.
+        var banner: CGRect
+        var content: CGRect
+        /// The text fades out as the panel opens, the content fades in once it has room.
+        var bannerAlpha: CGFloat
+        var contentAlpha: CGFloat
+    }
+
+    static let bannerHeight: CGFloat = 26
+    static let panelWidth: CGFloat = 540
+    static let panelPadding: CGFloat = 16
+
+    /// `attention` grows a banner under the notch, as wide as the notch and the pet's box (until the
+    /// request has been opened once). `reveal` (hover, 0…1) opens it into a panel around the notch,
+    /// `contentHeight` tall, in two phases: first the width, both sides starting and arriving together
+    /// (the right one, already out to the pet, has less way to go, so it moves slower), then the height.
+    /// Closing plays it backwards.
+    /// The pet keeps its collapsed seat on the right throughout.
+    func requestLayout(open: CGFloat, attention: CGFloat, reveal: CGFloat, contentHeight: CGFloat) -> RequestLayout {
+        var l = layout(open: open, expand: 0)
+        let notchBottom = top - height
+        let a = min(1.05, max(0, attention)), v = min(1, max(0, reveal))
+        let wide = smoothstep(0, 0.5, v), tall = smoothstep(0.5, 1, v)
+        let banner = CGRect(x: notchMinX, y: notchBottom - Self.bannerHeight, width: l.box.maxX - notchMinX, height: height + Self.bannerHeight)
+        let mid = (notchMinX + notchMaxX) / 2
+        let half = max(l.box.maxX - mid, Self.panelWidth / 2)
+        let pad = Self.panelPadding
+        let panelBottom = notchBottom - 10 - contentHeight - pad
+        let panel = CGRect(x: mid - half, y: panelBottom, width: 2 * half, height: top - panelBottom)
+        let start = lerp(l.box, banner, a)
+        // The left side starts from the notch's own edge: inside the notch it moves unseen, which made
+        // it look late on opening and early on closing. Behind the notch, the extra width is invisible.
+        let leftStart = min(start.minX, notchMinX)
+        let minX = lerp(leftStart, panel.minX, wide), maxX = lerp(start.maxX, panel.maxX, wide)
+        let minY = lerp(start.minY, panel.minY, tall)
+        let box = CGRect(x: minX, y: minY, width: maxX - minX, height: start.maxY - minY)
+        l.box = box
+        l.spansNotch = true
+        l.bottomRadius = min(lerp(Self.bottomRadius, 20, tall), box.height / 2)
+        return RequestLayout(
+            box: l,
+            banner: CGRect(x: box.minX, y: box.minY, width: box.width, height: Self.bannerHeight),
+            content: CGRect(x: panel.minX + pad, y: panel.minY + pad, width: panel.width - 2 * pad, height: contentHeight),
+            bannerAlpha: smoothstep(0.5, 1, a) * (1 - smoothstep(0, 0.4, wide)),
+            // Not tied to `attention`: once seen, the banner is gone but hovering still opens the panel.
+            // The view clips it to the box, which uncovers it top down; the fade only softens that.
+            contentAlpha: smoothstep(0.3, 0.9, tall)
+        )
+    }
+
+    /// Docked panel while a request is shown: room for the open request panel too.
+    func requestPanelFrame(contentHeight: CGFloat) -> CGRect {
+        let full = requestLayout(open: 1, attention: 1, reveal: 1, contentHeight: contentHeight).box.box
+        return panelFrame.union(full.insetBy(dx: -24, dy: -24)).intersection(CGRect(x: -1e6, y: -1e6, width: 2e6, height: top + 1e6))
     }
 
     // Apple does not expose the notch's shape: these defaults are eyeballed on a 14" MacBook Pro and
@@ -157,6 +239,19 @@ struct NotchGeometry {
     func path(for l: Layout, origin: CGPoint) -> CGPath {
         let box = l.box.offsetBy(dx: -origin.x, dy: -origin.y)
         let L = box.minX, R = box.maxX, T = box.maxY, B = box.minY
+        if l.spansNotch {
+            // The notch itself, grown: square top against the screen edge, an ear on each side.
+            let f = l.fillet, r = min(l.bottomRadius, box.height / 2)
+            let p = CGMutablePath()
+            p.move(to: CGPoint(x: L - f, y: T))
+            p.addLine(to: CGPoint(x: R + f, y: T))
+            p.addArc(tangent1End: CGPoint(x: R, y: T), tangent2End: CGPoint(x: R, y: T - f), radius: f)
+            p.addArc(tangent1End: CGPoint(x: R, y: B), tangent2End: CGPoint(x: R - r, y: B), radius: r)
+            p.addArc(tangent1End: CGPoint(x: L, y: B), tangent2End: CGPoint(x: L, y: B + r), radius: r)
+            p.addArc(tangent1End: CGPoint(x: L, y: T), tangent2End: CGPoint(x: L - f, y: T), radius: f)
+            p.closeSubpath()
+            return p
+        }
         let notchBottom = T - height
         let depth = max(0, notchBottom - B)
         let r = l.bottomRadius

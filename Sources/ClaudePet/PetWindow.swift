@@ -20,7 +20,10 @@ final class PetPanel: NSPanel {
         ignoresMouseEvents = true
     }
 
-    override var canBecomeKey: Bool { false }
+    /// Only while the user types an answer in the request panel: a pet that became key on every
+    /// click would take the keyboard away from the app in front.
+    var allowsKey = false
+    override var canBecomeKey: Bool { allowsKey }
     override var canBecomeMain: Bool { false }
 
     /// Never push the panel below the menu bar.
@@ -239,6 +242,28 @@ final class PetController: NSObject {
     private var lastStep = CACurrentMediaTime()
     private var hovering = false
 
+    /// What Claude is waiting for (permission, questions): around the notch, or in a card above the pet.
+    let requestView = RequestView()
+    private var request: PendingRequest?
+    private var requestHeight: CGFloat = 0
+    private let bannerLabel = RequestView.bannerLabel()
+    /// Clips the request to the black box, so the box uncovers it as it grows.
+    private let requestClip = NSView()
+    private lazy var card = RequestCard()
+    /// Banner under the notch while a request waits, and the full panel on hover.
+    private var attention = Spring(value: 0, target: 0, stiffness: 300, damping: 24)
+    /// The request the user has opened once: no more banner or pill for it, only the alert sprite.
+    private var seenRequestID: Int?
+    private var requestSeen: Bool { request != nil && request?.id == seenRequestID }
+    /// Floating: the cursor is over the pet's body, or over the card.
+    private var petHovered = false
+    private var overCard = false
+    private var cardCollapse: DispatchWorkItem?
+    /// The "Autre" field has the keyboard: the request stays open whatever the cursor does.
+    private var typing = false
+    /// Width then height, eased by `requestLayout`.
+    private var reveal = Tween(duration: 0.5)
+
     override init() {
         let saved = UserDefaults.standard.integer(forKey: Self.scaleKey)
         scale = (3...8).contains(saved) ? saved : 5
@@ -251,6 +276,22 @@ final class PetController: NSObject {
         view.onMouseDown = { [unowned self] in self.mouseDown() }
         view.onMouseDragged = { [unowned self] in self.mouseDragged() }
         view.onMouseUp = { [unowned self] in self.mouseUp() }
+        view.addSubview(bannerLabel)
+        bannerLabel.alphaValue = 0
+        requestView.isHidden = true
+        requestClip.wantsLayer = true
+        requestClip.layer?.masksToBounds = true
+        view.addSubview(requestClip)
+        requestView.onResize = { [unowned self] in self.syncRequestUI() }
+        requestView.onEditing = { [unowned self] editing in self.setTyping(editing) }
+        card.onHover = { [unowned self] inside in
+            self.overCard = inside
+            self.updateFloatingCard()
+        }
+        card.onClick = { [unowned self] in
+            self.overCard = true
+            self.updateFloatingCard()
+        }
         restorePosition()
         layoutFloating()
         render()
@@ -271,8 +312,15 @@ final class PetController: NSObject {
         }
     }
 
-    func show() { panel.orderFrontRegardless() }
-    func hide() { panel.orderOut(nil) }
+    func show() {
+        panel.orderFrontRegardless()
+        syncRequestUI()
+    }
+
+    func hide() {
+        panel.orderOut(nil)
+        card.hide()
+    }
     var isVisible: Bool { panel.isVisible }
 
     func update(state: PetState, tool: ToolKind?) {
@@ -312,6 +360,133 @@ final class PetController: NSObject {
         }
     }
 
+    // MARK: Requests
+
+    /// The request to show (nil: none), and how many others wait behind it.
+    func showRequest(_ request: PendingRequest?, waiting: Int) {
+        let had = self.request != nil
+        self.request = request
+        requestView.show(request, waiting: waiting)
+        if request == nil {
+            reveal.target = 0
+            if had, hovering { expand.target = 1 }
+        } else {
+            // While a request waits, hovering opens it instead of the gauges.
+            expand.target = 0
+            reveal.target = hovering ? 1 : 0
+            if hovering, mode == .notch { seenRequestID = request?.id }
+        }
+        attention.target = request == nil || requestSeen ? 0 : 1
+        syncRequestUI()
+        startMotion()
+    }
+
+    /// Opens the request as hovering would (tests drive it through `/control`).
+    func revealRequest(_ on: Bool) {
+        guard request != nil else { return }
+        if mode == .notch {
+            // Like a hover: seen on opening, the banner only goes away on closing.
+            if on { seenRequestID = request?.id }
+            reveal.target = on ? 1 : 0
+            if !on { attention.target = requestSeen ? 0 : 1 }
+            startMotion()
+        } else {
+            overCard = on
+            updateFloatingCard()
+        }
+    }
+
+    /// Writes the panel's view to `path`, and the request card to `path` + "-card.png" when shown.
+    func snapshot(to path: String) {
+        func write(_ view: NSView, _ path: String) {
+            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        }
+        write(view, path)
+        if let content = card.contentView { write(content, path + "-card.png") }
+    }
+
+    /// Puts the request where the current mode shows it.
+    private func syncRequestUI() {
+        switch mode {
+        case .notch:
+            card.hide()
+            guard let geometry = notch else { return }
+            if request != nil {
+                if requestView.superview !== requestClip { requestClip.addSubview(requestView) }
+                requestHeight = requestView.height(for: NotchGeometry.panelWidth - 2 * NotchGeometry.panelPadding)
+                let frame = geometry.requestPanelFrame(contentHeight: requestHeight)
+                if panel.frame != frame {
+                    panel.setFrame(frame, display: false)
+                }
+            }
+            layoutNotch()
+        case .floating:
+            bannerLabel.alphaValue = 0
+            updateFloatingCard()
+        case .flying, .dragging, .dropping:
+            hideRequestUI()
+        }
+    }
+
+    /// Floating: the card opens while the cursor is on the pet or on the card. Before the first
+    /// opening, a pill says Claude needs you; after it, only the pet's alert sprite does.
+    private func updateFloatingCard() {
+        guard mode == .floating, request != nil, panel.isVisible else {
+            hideCard()
+            return
+        }
+        if overCard || petHovered || typing {
+            cardCollapse?.cancel()
+            cardCollapse = nil
+            seenRequestID = request?.id
+            card.show(requestView, near: panel.frame, expanded: true)
+        } else if card.isExpanded {
+            guard cardCollapse == nil else { return }
+            // A short grace period, so crossing from the pet to the card does not close it.
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.cardCollapse = nil
+                guard !self.overCard, !self.petHovered, !self.typing else { return }
+                self.collapseCard()
+            }
+            cardCollapse = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+        } else {
+            collapseCard()
+        }
+    }
+
+    private func setTyping(_ on: Bool) {
+        typing = on
+        panel.allowsKey = on && mode == .notch
+        card.allowsKey = on && mode == .floating
+        guard !on else { return }
+        // Give the keyboard back to the app in front, then close if the cursor has left meanwhile.
+        if panel.isKeyWindow { panel.resignKey() }
+        card.resignKey()
+        trackMouse()
+        updateFloatingCard()
+    }
+
+    private func collapseCard() {
+        if requestSeen || request == nil { hideCard() } else { card.show(requestView, near: panel.frame, expanded: false) }
+    }
+
+    private func hideCard() {
+        cardCollapse?.cancel()
+        cardCollapse = nil
+        overCard = false
+        card.hide()
+    }
+
+    private func hideRequestUI() {
+        hideCard()
+        bannerLabel.alphaValue = 0
+        if requestView.superview === requestClip { requestView.isHidden = true }
+    }
+
     func setScale(_ newScale: Int) {
         scale = newScale
         UserDefaults.standard.set(newScale, forKey: Self.scaleKey)
@@ -319,6 +494,7 @@ final class PetController: NSObject {
         // Keep the feet where they were.
         panel.setFrame(NSRect(origin: panel.frame.origin, size: Self.size(for: newScale)), display: true)
         layoutFloating()
+        syncRequestUI()
         trackMouse()
     }
 
@@ -330,6 +506,7 @@ final class PetController: NSObject {
         let x = (corner == .bottomLeft || corner == .topLeft) ? screen.minX + margin : screen.maxX - size.width - margin
         let y = (corner == .bottomLeft || corner == .bottomRight) ? screen.minY + margin : screen.maxY - size.height - margin
         panel.setFrameOrigin(NSPoint(x: x, y: y))
+        card.follow(panel.frame)
         trackMouse()
     }
 
@@ -393,7 +570,7 @@ final class PetController: NSObject {
         if !settleBox { open.snap(to: 1) }
         panel.setFrame(geometry.panelFrame, display: true)
         render()
-        layoutNotch()
+        syncRequestUI()
         trackMouse()
     }
 
@@ -405,11 +582,14 @@ final class PetController: NSObject {
         panel.setFrame(CGRect(origin: savedFloatingOrigin(), size: Self.size(for: scale)), display: true)
         render()
         layoutFloating()
+        if requestView.superview === requestClip { requestView.isHidden = true }
+        syncRequestUI()
         trackMouse()
     }
 
     private func startFlight(_ f: Flight) {
         mode = .flying
+        hideRequestUI()
         flight = f
         panel.ignoresMouseEvents = true
         // Cover every screen the trip touches.
@@ -477,10 +657,28 @@ final class PetController: NSObject {
 
     private func layoutNotch() {
         guard let geometry = notch else { return }
-        let l = geometry.layout(open: open.value, expand: expand.value)
         let origin = panel.frame.origin
-        applyBox(geometry, l, origin: origin)
-        view.spriteRect = l.sprite.offsetBy(dx: -origin.x, dy: -origin.y)
+        if request != nil || attention.value > 0.001 {
+            let r = geometry.requestLayout(open: open.value, attention: attention.value, reveal: reveal.value, contentHeight: requestHeight)
+            applyBox(geometry, r.box, origin: origin)
+            view.spriteRect = r.box.sprite.offsetBy(dx: -origin.x, dy: -origin.y)
+            let box = r.box.box.offsetBy(dx: -origin.x, dy: -origin.y)
+            requestClip.frame = box
+            requestView.frame = r.content.offsetBy(dx: -origin.x - box.minX, dy: -origin.y - box.minY)
+            requestView.alphaValue = r.contentAlpha
+            // Hidden, it cannot swallow clicks meant for the box.
+            requestView.isHidden = r.contentAlpha < 0.02
+            let h = bannerLabel.intrinsicContentSize.height
+            let banner = r.banner.offsetBy(dx: -origin.x, dy: -origin.y)
+            bannerLabel.frame = CGRect(x: banner.minX, y: banner.midY - h / 2, width: banner.width, height: h)
+            bannerLabel.alphaValue = r.bannerAlpha
+        } else {
+            let l = geometry.layout(open: open.value, expand: expand.value)
+            applyBox(geometry, l, origin: origin)
+            view.spriteRect = l.sprite.offsetBy(dx: -origin.x, dy: -origin.y)
+            bannerLabel.alphaValue = 0
+            if requestView.superview === requestClip { requestView.isHidden = true }
+        }
         view.squash = squash.value
     }
 
@@ -509,6 +707,8 @@ final class PetController: NSObject {
         lastStep = now
         open.step(dt)
         expand.step(dt)
+        attention.step(dt)
+        reveal.step(dt)
         squash.step(dt)
         tilt.step(dt)
         size.step(dt)
@@ -527,9 +727,15 @@ final class PetController: NSObject {
             view.squash = squash.value
         }
 
-        if !isTransitioning && open.isSettled && expand.isSettled && squash.isSettled && tilt.isSettled {
+        if !isTransitioning && open.isSettled && expand.isSettled && squash.isSettled && tilt.isSettled
+            && attention.isSettled && reveal.isSettled {
             motionTimer?.invalidate()
             motionTimer = nil
+            // The request panel has folded away: back to the small docked panel.
+            if mode == .notch, request == nil, let geometry = notch, panel.frame != geometry.panelFrame {
+                panel.setFrame(geometry.panelFrame, display: false)
+                layoutNotch()
+            }
             // The layout just settled under a cursor that may not move: re-check hover and click-through.
             trackMouse()
         }
@@ -562,6 +768,8 @@ final class PetController: NSObject {
         drag = d
         mode = .dragging
         hovering = false
+        reveal.target = 0
+        hideRequestUI()
         notch = notch ?? NotchGeometry.find()
         size.snap(to: d.rect.width / CGFloat(PixelCanvas.standardWidth))
         tilt.snap(to: 0)
@@ -787,18 +995,36 @@ final class PetController: NSObject {
         case .floating:
             let hit = view.hitsSprite(at: local)
             if panel.ignoresMouseEvents == hit { panel.ignoresMouseEvents = !hit }
+            if hit != petHovered {
+                petHovered = hit
+                if request != nil { updateFloatingCard() }
+            }
         case .notch:
             let inBox = view.hitsBox(at: local)
+            // The physical notch counts as part of the box for hovering, request or not (clicks there
+            // still go through: the box decides what is clickable).
+            let underNotch = notch.map {
+                CGRect(x: $0.notchMinX, y: $0.top - $0.height, width: $0.notchMaxX - $0.notchMinX, height: $0.height + 1)
+                    .contains(NSEvent.mouseLocation)
+            } ?? false
             // Leave a little slack before collapsing, so the edge of the box does not flicker.
-            let nearBox = view.boxPath?.boundingBoxOfPath.insetBy(dx: -6, dy: -6).contains(local) ?? false
-            if !hovering && inBox {
+            let nearBox = underNotch || (view.boxPath?.boundingBoxOfPath.insetBy(dx: -6, dy: -6).contains(local) ?? false)
+            if !hovering && (inBox || underNotch) {
                 hovering = true
-                expand.target = 1
+                if request != nil {
+                    reveal.target = 1
+                    seenRequestID = request?.id
+                } else {
+                    expand.target = 1
+                }
                 HapticPulse.strong()
                 startMotion()
-            } else if hovering && !nearBox {
+            } else if hovering && !nearBox && !typing {
                 hovering = false
                 expand.target = 0
+                reveal.target = 0
+                // Opened once: the banner does not come back, the alert sprite stays.
+                attention.target = request == nil || requestSeen ? 0 : 1
                 startMotion()
             }
             if panel.ignoresMouseEvents == inBox { panel.ignoresMouseEvents = !inBox }
@@ -867,6 +1093,7 @@ final class PetController: NSObject {
 
     @objc private func windowDidMove(_ note: Notification) {
         guard mode == .floating else { return }
+        card.follow(panel.frame)
         UserDefaults.standard.set(NSStringFromPoint(panel.frame.origin), forKey: Self.originKey)
     }
 
