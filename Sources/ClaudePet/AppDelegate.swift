@@ -33,9 +33,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         termSource?.setEventHandler { NSApp.terminate(nil) }
         termSource?.resume()
 
+        // Nothing runs (no server, no pet, no icon) before the user has accepted the installation.
+        if UserDefaults.standard.bool(forKey: Self.setupAcceptedKey) {
+            start()
+        } else {
+            showOnboarding()
+        }
+    }
+
+    // MARK: First launch
+
+    static let setupAcceptedKey = "setupAccepted"
+    private var onboarding: OnboardingWindowController?
+
+    /// Lists what the installation does, with Accept / Refuse. Refusing quits: the next launch asks again.
+    private func showOnboarding() {
+        let setup = HookSetup.standard
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var path = setup.settingsURL.path
+        if path.hasPrefix(home + "/") { path = "~" + path.dropFirst(home.count) }
+        let controller = OnboardingWindowController(plan: OnboardingPlan(
+            settingsPath: path, existingStatusLine: setup.existingStatusLine(), hookCount: HookSetup.expectedHooks
+        ))
+        controller.onAccept = { [unowned self, unowned controller] readQuotas in
+            do {
+                try setup.install()
+            } catch {
+                return error.localizedDescription
+            }
+            OAuthUsageSource.isEnabled = readQuotas
+            // A fresh install lives in the notch when there is one: start() then docks the pet directly.
+            if NotchGeometry.find() != nil { UserDefaults.standard.set(true, forKey: PetController.notchKey) }
+            UserDefaults.standard.set(true, forKey: Self.setupAcceptedKey)
+            DispatchQueue.main.async {
+                controller.showSuccessAndClose { [unowned self] in
+                    self.onboarding = nil
+                    self.start()
+                    self.startTutorialIfNeeded()
+                }
+            }
+            return nil
+        }
+        controller.onRefuse = { NSApp.terminate(nil) }
+        onboarding = controller
+        controller.show()
+    }
+
+    // MARK: First-run tutorial
+
+    private var tutorial: TutorialOverlay?
+
+    /// Once ever, right after the installation, and only where it makes sense: the pet docked in a notch.
+    private func startTutorialIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: TutorialOverlay.doneKey) else { return }
+        guard pet.mode == .notch, NotchGeometry.find() != nil else {
+            UserDefaults.standard.set(true, forKey: TutorialOverlay.doneKey)
+            return
+        }
+        // Let the onboarding window finish fading before the screen dims.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.startTutorial() }
+    }
+
+    private func startTutorial() {
+        guard tutorial == nil, pet.isVisible, let overlay = TutorialOverlay(pet: pet) else { return }
+        overlay.onFinish = { [unowned self] in self.tutorial = nil }
+        tutorial = overlay
+        overlay.start()
+    }
+
+    // MARK: Start
+
+    private func start() {
         pet = PetController()
         pet.view.contextMenuProvider = { [unowned self] in self.buildMenu() }
         pet.onClick = { [unowned self] in self.wakeUp() }
+        pet.onModeChange = { [unowned self] in self.tutorial?.petModeChanged($0) }
         pet.show()
         requests.onChange = { [unowned self] in
             self.pet.showRequest(self.requests.current, waiting: max(0, self.requests.queue.count - 1))
@@ -146,6 +218,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if let name = control["settings_press"] as? String { self.settings.view.press(name) }
             if let path = control["settings_snapshot"] as? String { self.settings.snapshot(to: path) }
+            // Tests: the first-run tutorial, whether it was already seen or not.
+            if let on = control["tutorial"] as? Bool { on ? self.startTutorial() : self.tutorial?.stop() }
+            if control["tutorial_skip"] as? Bool == true { self.tutorial?.skip() }
+            if let path = control["tutorial_snapshot"] as? String { self.tutorial?.snapshot(to: path) }
         }
         server.stateProvider = { [unowned self] in
             var snapshot = self.tracker.snapshot()
@@ -160,6 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot["requests"] = self.requests.queue.map { ["id": $0.id, "session": $0.session, "tool": $0.tool] }
             snapshot["notch_radius"] = Double(NotchGeometry.bottomRadius)
             snapshot["notch_ear"] = Double(NotchGeometry.earRadius)
+            snapshot["tutorial"] = self.tutorial?.stateName ?? NSNull()
             return snapshot
         }
         server.onStatusChange = { [unowned self] status in
@@ -244,6 +321,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.view.onSettings = { [unowned self] in self.openSettings() }
         panel.window.onSettings = { [unowned self] in self.openSettings() }
         panel.view.onQuit = { NSApp.terminate(nil) }
+        panel.view.onToggleVisible = { [unowned self] in self.toggleVisible() }
+        panel.view.onToggleNotch = { [unowned self] in self.toggleNotch() }
+    }
+
+    // Shared by the panel and the settings window.
+    private func toggleVisible() {
+        pet.isVisible ? pet.hide() : pet.show()
+        panel.refresh()
+        settings.refresh()
+    }
+
+    private func toggleNotch() {
+        pet.setNotchMode(!pet.wantsNotch)
+        panel.refresh()
+        settings.refresh()
+        // The flight takes about a second: show where the pet landed.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            self.panel.refresh()
+            self.settings.refresh()
+        }
     }
 
     private static func redraw(_ view: NSView) {
@@ -266,6 +363,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.serverOK = server.port != nil
         m.server = server.port == nil ? serverLine() : tr("En écoute", "Listening")
         m.serverDetail = serverLine()
+        m.petVisible = pet.isVisible
+        m.notch = pet.wantsNotch
+        m.notchAvailable = pet.notchAvailable
+        m.transitioning = pet.isTransitioning
         return m
     }
 
@@ -301,16 +402,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.modelProvider = { [unowned self] in self.settingsModel() }
         settings.onActivate = { [unowned self] in self.reloadHooks() }
         let view = settings.view
-        view.onToggleVisible = { [unowned self] in
-            self.pet.isVisible ? self.pet.hide() : self.pet.show()
-            self.settings.refresh()
-        }
-        view.onToggleNotch = { [unowned self] in
-            self.pet.setNotchMode(!self.pet.wantsNotch)
-            self.settings.refresh()
-            // The flight takes about a second: show where the pet landed.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.settings.refresh() }
-        }
+        view.onToggleVisible = { [unowned self] in self.toggleVisible() }
+        view.onToggleNotch = { [unowned self] in self.toggleNotch() }
         view.onToggleUsageAPI = { [unowned self] in
             OAuthUsageSource.isEnabled.toggle()
             OAuthUsageSource.isEnabled ? self.usageAPI.start() : self.usageAPI.stop()

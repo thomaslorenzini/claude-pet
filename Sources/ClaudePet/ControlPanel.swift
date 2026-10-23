@@ -178,6 +178,11 @@ final class ControlPanelView: NSView {
         var server = ""
         var serverDetail = ""
         var serverOK = true
+        // Quick settings, one click away from the menu bar.
+        var petVisible = true
+        var notch = false
+        var notchAvailable = false
+        var transitioning = false
     }
 
     static let width: CGFloat = 320
@@ -187,17 +192,24 @@ final class ControlPanelView: NSView {
     var onPoke: (() -> Void)?
     var onSettings: (() -> Void)?
     var onQuit: (() -> Void)?
+    var onToggleVisible: (() -> Void)?
+    var onToggleNotch: (() -> Void)?
 
     let stage = PetStage()
+    private let visibleRow = SettingRow(accessory: PanelToggle())
+    private let notchRow = SettingRow(accessory: PanelToggle())
     private let settingsButton = FooterButton(title: tr("Réglages…", "Settings…"), shortcut: "⌘,")
     private let quitButton = FooterButton(title: tr("Quitter", "Quit"), shortcut: "⌘Q")
 
-    // Layout, top to bottom: stage, usage title, rings and their labels, a hairline, the footer.
+    // Layout, top to bottom: stage, usage title, rings and their labels, the quick settings card, a hairline,
+    // the footer.
     private static let stageRect = CGRect(x: pad, y: pad, width: width - 2 * pad, height: 112)
     private static let usageTitleY: CGFloat = stageRect.maxY + 18
     private static let ringsY: CGFloat = usageTitleY + 24
     private static let ringSize: CGFloat = 50
-    private static let separatorY: CGFloat = ringsY + ringSize + 50
+    private static let rowHeight: CGFloat = 48
+    private static let cardRect = CGRect(x: pad, y: ringsY + ringSize + 50, width: width - 2 * pad, height: 2 * rowHeight)
+    private static let separatorY: CGFloat = cardRect.maxY + 12
     private static let footerY: CGFloat = separatorY + 8
     static let preferredHeight: CGFloat = footerY + 24 + 9
     var preferredHeight: CGFloat { Self.preferredHeight }
@@ -205,10 +217,14 @@ final class ControlPanelView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         addSubview(stage)
+        addSubview(visibleRow)
+        addSubview(notchRow)
         addSubview(settingsButton)
         addSubview(quitButton)
         stage.onPoke = { [weak self] in self?.onPoke?() }
         settingsButton.onClick = { [weak self] in self?.onSettings?() }
+        visibleRow.onClick = { [weak self] in self?.onToggleVisible?() }
+        notchRow.onClick = { [weak self] in self?.onToggleNotch?() }
         quitButton.onClick = { [weak self] in self?.onQuit?() }
         apply()
     }
@@ -220,12 +236,23 @@ final class ControlPanelView: NSView {
 
     private func apply() {
         stage.model = model
+        visibleRow.title = tr("Afficher le pet", "Show the pet")
+        visibleRow.subtitle = model.petVisible ? tr("Visible sur le bureau", "Visible on the desktop")
+            : tr("Masqué : les demandes restent dans Claude", "Hidden: requests stay in Claude")
+        (visibleRow.accessory as! PanelToggle).isOn = model.petVisible
+        notchRow.title = tr("Vivre dans l'encoche", "Live in the notch")
+        notchRow.subtitle = model.notchAvailable ? tr("Se loge à côté de la caméra", "Settles next to the camera")
+            : tr("Aucune encoche sur cet écran", "No notch on this screen")
+        notchRow.isEnabled = model.notchAvailable && !model.transitioning
+        (notchRow.accessory as! PanelToggle).isOn = model.notch
         needsDisplay = true
     }
 
     override func layout() {
         super.layout()
         stage.frame = Self.stageRect
+        visibleRow.frame = CGRect(x: Self.cardRect.minX, y: Self.cardRect.minY, width: Self.cardRect.width, height: Self.rowHeight)
+        notchRow.frame = visibleRow.frame.offsetBy(dx: 0, dy: Self.rowHeight)
         // The footer buttons hang off the right edge, their hover plate aligned with the cards' edge.
         let quit = quitButton.fittingSize, settings = settingsButton.fittingSize
         quitButton.frame = CGRect(x: bounds.width - Self.pad - quit.width + 6, y: Self.footerY, width: quit.width, height: quit.height)
@@ -261,6 +288,12 @@ final class ControlPanelView: NSView {
             centered(gauge.title.attributed(.systemFont(ofSize: 12, weight: .medium), theme.text), x: x, width: column, y: Self.ringsY + Self.ringSize + 8)
             centered(gauge.note.attributed(.systemFont(ofSize: 10.5), theme.tertiary), x: x + 4, width: column - 8, y: Self.ringsY + Self.ringSize + 24)
         }
+
+        // Quick settings card, a hairline between its two rows.
+        theme.card.setFill()
+        NSBezierPath(roundedRect: Self.cardRect, xRadius: 11, yRadius: 11).fill()
+        theme.stroke.setFill()
+        CGRect(x: Self.cardRect.minX + 12, y: Self.cardRect.minY + Self.rowHeight - 0.5, width: Self.cardRect.width - 24, height: 1).fill()
 
         // Hairline over the footer, full width like a menu's separator.
         theme.stroke.setFill()
@@ -324,6 +357,8 @@ final class ControlPanelView: NSView {
         case "settings": onSettings?()
         case "pet": onPoke?()
         case "quit": onQuit?()
+        case "visible": onToggleVisible?()
+        case "notch": onToggleNotch?()
         default: break
         }
     }

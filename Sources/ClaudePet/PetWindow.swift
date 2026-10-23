@@ -159,7 +159,7 @@ final class PetView: NSView {
 final class PetController: NSObject {
     private static let originKey = "petOrigin"
     private static let scaleKey = "petScale"
-    private static let notchKey = "petInNotch"
+    static let notchKey = "petInNotch"
 
     enum Mode { case floating, notch, flying, dragging, dropping }
 
@@ -204,7 +204,11 @@ final class PetController: NSObject {
     private(set) var scale: Int
     private(set) var state: PetState = .idle
     private(set) var tool: ToolKind?
-    private(set) var mode = Mode.floating
+    private(set) var mode = Mode.floating {
+        didSet { if mode != oldValue { onModeChange?(mode) } }
+    }
+    /// Every mode change (the first-run tutorial follows the user's drags with it).
+    var onModeChange: ((Mode) -> Void)?
     private var t = 0
     /// When the pet last stopped typing, to skip taking the laptop out again on the next command.
     private var typingStoppedAt: CFTimeInterval?
@@ -1047,6 +1051,26 @@ final class PetController: NSObject {
         let text = gaugeDetails[index]
         let anchor = CGPoint(x: view.gauges[index].rect.midX, y: bottom)
         if view.tooltip?.text != text || view.tooltip?.anchor != anchor { view.tooltip = (text, anchor) }
+    }
+
+    // MARK: Geometry for the tutorial
+
+    /// Where the sprite is drawn right now, in screen coordinates, whatever the mode.
+    var spriteFrame: CGRect { view.spriteRect.offsetBy(dx: panel.frame.minX, dy: panel.frame.minY) }
+
+    /// The sprite and, docked or near the notch, its black box: everything the pet shows on screen.
+    var visibleFrame: CGRect {
+        guard let box = view.boxPath?.boundingBoxOfPath, !box.isEmpty else { return spriteFrame }
+        return spriteFrame.union(box.offsetBy(dx: panel.frame.minX, dy: panel.frame.minY))
+    }
+
+    var floatingSize: NSSize { Self.size(for: scale) }
+
+    /// A regular (floating-size) frame whose body sits on the docked pet: collapsed, or in its hovered
+    /// seat, which is where a drag into the notch lands.
+    func dockedRegularRect(hovered: Bool) -> CGRect? {
+        guard let geometry = notch ?? NotchGeometry.find() else { return nil }
+        return Self.regularRect(matching: geometry.layout(open: 1, expand: hovered ? 1 : 0).sprite)
     }
 
     // MARK: Helpers

@@ -446,7 +446,7 @@ final class SettingsView: NSView {
             rows.append((tr("Copie d'origine", "Original copy"), tr("Avant Claude Pet · ", "Before Claude Pet · ") + Self.format(original.date), true))
         } else {
             rows.append((tr("Copie d'origine", "Original copy"),
-                         tr("Pas de settings.json avant l'installation : utilise Désinstaller", "No settings.json before the install: use Uninstall instead"), false))
+                         tr("Aucune copie d'origine : elle est faite à l'installation depuis l'app", "No original copy: the app makes one when it installs"), false))
         }
         if let latest = model.latestBackup {
             rows.append((tr("Avant la dernière modification", "Before the last change"), Self.format(latest.date), true))

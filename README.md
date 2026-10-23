@@ -7,18 +7,33 @@ Un petit compagnon en pixel-art qui vit par-dessus le bureau macOS et réagit à
 Claude Code ──hook──▶ curl POST 127.0.0.1:47319/event ──▶ ClaudePet.app ──▶ sprite
 ```
 
-## Lancer
+## Installer
+
+Ouvre `ClaudePet.dmg` et glisse **Claude Pet** dans Applications, puis lance-le depuis Applications. Au premier
+lancement, un écran détaille tout ce qui va être installé (les hooks dans `~/.claude/settings.json`, le relais de la
+ligne de statut, quelques fichiers dans `~/Library/Application Support/claude-pet/`). **Accepter** installe tout et
+démarre le pet, directement dans l'encoche si ton Mac en a une ; **Refuser** ferme l'app sans rien écrire, et l'écran reviendra au prochain lancement. Avant toute
+écriture, `settings.json` est copié : la copie d'origine (avant Claude Pet) et celle d'avant la dernière
+modification peuvent être remises depuis Réglages › Claude Code.
+
+Le DMG n'est pas encore signé par un développeur identifié ni notarisé : sur un autre Mac, macOS bloquera l'app
+(Réglages système › Confidentialité et sécurité › « Ouvrir quand même »).
+
+## Lancer depuis les sources
 
 Il faut macOS 13+ et Swift 5.10+ (les Command Line Tools suffisent, pas besoin de Xcode).
 
 ```bash
 swift run ClaudePet
+scripts/make-dmg.sh          # construit build/ClaudePet.dmg
 ```
 
 Le pet apparaît en bas à droite, et sa silhouette dans la barre des menus. Un clic sur celle-ci ouvre un panneau :
-le pet animé et ce que fait Claude, les trois jauges d'utilisation, puis les réglages (afficher, encoche, quotas du
-compte, taille, coin de l'écran). Échap ou un clic ailleurs le referme, ⌘Q quitte. Glisse le pet à la souris : sa
-position est mémorisée. Un clic droit sur le pet ouvre un menu avec les mêmes réglages.
+le pet animé et ce que fait Claude, les trois jauges d'utilisation, deux réglages rapides (**Afficher le pet**,
+**Vivre dans l'encoche**), l'état du serveur, **Réglages…** (⌘,) et **Quitter** (⌘Q). Échap ou un clic ailleurs le referme. La fenêtre de réglages regroupe : afficher le pet, l'encoche,
+la taille, le coin de l'écran, les quotas du compte, l'état des hooks (réparer, réinstaller, désinstaller) et la
+restauration des copies de `settings.json`. Glisse le pet à la souris : sa position est mémorisée. Un clic droit sur
+le pet ouvre un menu avec les réglages essentiels.
 L'interface est en français si macOS est en français, en anglais sinon (la langue choisie pour Claude Pet
 dans Réglages système › Langue et région est respectée).
 
@@ -69,11 +84,11 @@ renouvelé par l'app elle-même. Les sessions de Claude Desktop ne renouvellent 
 connexion de Desktop). S'il a expiré, l'app demande donc à Claude Code de le faire en lançant `claude -p /usage`, sans
 hooks ni historique, au plus une fois toutes les 10 min. Cette commande n'envoie aucune requête au modèle et ne
 consomme pas de quota (vérifié dans son journal de debug). La requête est un GET vers cette seule
-adresse, sans redirection ni cookie, avec des pauses plus longues en cas d'erreur. Pour couper cette source : panneau de la
-barre des menus → **Quotas du compte**. L'état de la source s'affiche au-dessus des jauges.
+adresse, sans redirection ni cookie, avec des pauses plus longues en cas d'erreur. Elle est désactivée par défaut (case de
+l'écran d'accueil) ; on l'active ou la coupe dans Réglages › Données › **Quotas du compte**, où s'affiche aussi son état.
 Le cookie de session claude.ai (endpoint `/usage` de Desktop) n'est, lui, jamais utilisé.
 
-`install-hooks.py` remplace la commande de ta ligne de statut par le relais, qui transmet le JSON au pet puis lance ta
+L'installation remplace la commande de ta ligne de statut par le relais, qui transmet le JSON au pet puis lance ta
 commande d'origine (sauvegardée dans `~/Library/Application Support/claude-pet/statusline-original`) : l'affichage du
 terminal ne change pas. `uninstall` la remet en place.
 
@@ -116,15 +131,19 @@ Lance `scripts/fake-event.sh` sans argument pour la liste complète.
 
 ## Brancher Claude Code
 
+L'app s'en charge (écran d'accueil, puis Réglages › Claude Code). Le script Python fait la même chose en ligne de
+commande, pour le développement :
+
 ```bash
 scripts/install-hooks.py install --dry-run   # montre le diff, n'écrit rien
 scripts/install-hooks.py install             # montre le diff, demande confirmation, sauvegarde, écrit
 scripts/install-hooks.py uninstall           # retire uniquement nos hooks
 ```
 
-- Le script fusionne dans `~/.claude/settings.json` sans toucher aux autres hooks (vibe-island, etc.). Nos entrées sont
+- L'installation fusionne dans `~/.claude/settings.json` sans toucher aux autres hooks (vibe-island, etc.). Nos entrées sont
   repérées par le commentaire `# claude-pet-hook`, ce qui rend `install` idempotent et `uninstall` propre.
-- Avant d'écrire, il copie le fichier dans `settings.json.claude-pet-backup-<date>`.
+- Avant d'écrire, elle copie le fichier dans `settings.json.claude-pet-backup-<date>` ; l'app garde en plus, une
+  seule fois, `settings.json.claude-pet-original`.
 - Les sessions Claude Code déjà ouvertes ne voient les nouveaux hooks qu'après redémarrage (ou via `/hooks`).
 
 Chaque hook lit le fichier `endpoint` et vérifie que le pet est vivant (`kill -0 <pid>`), deux commandes internes au
@@ -208,6 +227,9 @@ n'écoute que sur 127.0.0.1 et refuse les requêtes qui portent un en-tête `Ori
   permission Accessibilité. `scripts/measure-cpu.sh` mesure le CPU et la mémoire par état.
 - `Sources/ClaudePet/EventServer.swift` : serveur HTTP minimal (Network.framework).
 - `Sources/ClaudePet/ControlPanel.swift` : panneau de la barre des menus, dessiné à la main.
+- `Sources/ClaudePet/SettingsWindow.swift`, `PanelKit.swift` : fenêtre de réglages et éléments dessinés partagés.
+- `Sources/ClaudePet/OnboardingWindow.swift` : écran du premier lancement.
+- `Sources/ClaudePet/HookSetup.swift` : installation, désinstallation et restauration des hooks, en Swift.
 - `Sources/ClaudePet/AppDelegate.swift` : câblage, menu du clic droit.
 
 Pourquoi un Swift Package plutôt qu'un projet Xcode : il se compile avec `swift build` sans Xcode, il n'y a pas de
