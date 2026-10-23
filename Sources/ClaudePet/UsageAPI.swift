@@ -21,8 +21,10 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
     private static let interval: TimeInterval = 5 * 60
 
     var onUpdate: ((QuotaStore.Window?, QuotaStore.Window?) -> Void)?
-    private(set) var status = "pas encore interrogée"
+    private(set) var status = tr("pas encore interrogée", "not queried yet")
     private(set) var lastSuccess: Date?
+    private static let upToDate = tr("à jour", "up to date")
+    var isUpToDate: Bool { status == Self.upToDate }
     /// Expiry of the token last read from the Keychain (not secret), for diagnostics.
     private(set) var tokenExpiresAt: Date?
     /// While the token is expired, only the Keychain is re-read (local, free): no request is sent.
@@ -47,7 +49,7 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
 
     func start() {
         guard Self.isEnabled else {
-            status = "désactivée"
+            status = tr("désactivée", "off")
             return
         }
         schedule(after: 2)
@@ -63,7 +65,7 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
         timer?.invalidate()
         timer = nil
         token = nil
-        status = "désactivée"
+        status = tr("désactivée", "off")
     }
 
     private func schedule(after delay: TimeInterval) {
@@ -97,7 +99,7 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
         if let expiry = token.expiresAt, expiry < Date() {
             // Not a server failure: no backoff. Let Claude Code renew it, then look at the Keychain again.
             self.token = nil
-            status = "jeton expiré depuis \(QuotaStore.duration(expiry, Date())), renouvellement par Claude Code…"
+            status = tr("jeton expiré depuis \(QuotaStore.duration(expiry, Date())), renouvellement par Claude Code…", "token expired \(QuotaStore.duration(expiry, Date())) ago, Claude Code is renewing it…")
             if !CLIRenewal.run(completion: { [weak self] in self?.schedule(after: 1) }) {
                 schedule(after: Self.expiredRecheck)
             }
@@ -116,37 +118,37 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
 
     private func handle(data: Data?, response: HTTPURLResponse?, error: Error?) {
         guard let response else {
-            fail("réseau indisponible")
+            fail(tr("réseau indisponible", "network unavailable"))
             return
         }
         switch response.statusCode {
         case 200:
             guard let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                fail("réponse illisible")
+                fail(tr("réponse illisible", "unreadable response"))
                 return
             }
             let (five, week) = Self.parse(json, now: Date())
             guard five != nil || week != nil else {
-                fail("réponse sans quotas (format changé ?)")
+                fail(tr("réponse sans quotas (format changé ?)", "response without quotas (format changed?)"))
                 return
             }
             backoff = 0
             lastSuccess = Date()
-            status = "à jour"
+            status = Self.upToDate
             onUpdate?(five, week)
             schedule(after: Self.interval)
         case 401:
             // Claude Code may have renewed the token since: read it again soon.
             token = nil
-            status = "jeton refusé, en attente que Claude Code le renouvelle"
+            status = tr("jeton refusé, en attente que Claude Code le renouvelle", "token refused, waiting for Claude Code to renew it")
             schedule(after: Self.expiredRecheck)
         case 403:
-            fail("pas d'abonnement Pro/Max, ou OAuth désactivé par l'organisation", retryIn: 3600)
+            fail(tr("pas d'abonnement Pro/Max, ou OAuth désactivé par l'organisation", "no Pro/Max plan, or OAuth turned off by the organization"), retryIn: 3600)
         case 429:
             let retry = response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
-            fail("trop de requêtes, nouvel essai plus tard", retryIn: retry.map { max($0, Self.interval) })
+            fail(tr("trop de requêtes, nouvel essai plus tard", "too many requests, retrying later"), retryIn: retry.map { max($0, Self.interval) })
         default:
-            fail("erreur HTTP \(response.statusCode)")
+            fail(tr("erreur HTTP", "HTTP error") + " \(response.statusCode)")
         }
     }
 
@@ -204,15 +206,15 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         switch status {
         case errSecSuccess: break
-        case errSecItemNotFound: return .failure("Claude Code n'est pas connecté (rien dans le Trousseau)")
-        case errSecUserCanceled, errSecAuthFailed: return .failure("accès au Trousseau refusé")
-        default: return .failure("Trousseau indisponible (\(status))")
+        case errSecItemNotFound: return .failure(tr("Claude Code n'est pas connecté (rien dans le Trousseau)", "Claude Code isn't signed in (nothing in the Keychain)"))
+        case errSecUserCanceled, errSecAuthFailed: return .failure(tr("accès au Trousseau refusé", "Keychain access denied"))
+        default: return .failure(tr("Trousseau indisponible", "Keychain unavailable") + " (\(status))")
         }
         guard let data = item as? Data,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let login = json["claudeAiOauth"] as? [String: Any],
               let value = login["accessToken"] as? String, !value.isEmpty else {
-            return .failure("identifiants Claude Code illisibles")
+            return .failure(tr("identifiants Claude Code illisibles", "unreadable Claude Code credentials"))
         }
         let expiry = (login["expiresAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
         return .success((value, expiry))

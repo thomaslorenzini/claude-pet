@@ -15,12 +15,16 @@ Il faut macOS 13+ et Swift 5.10+ (les Command Line Tools suffisent, pas besoin d
 swift run ClaudePet
 ```
 
-Le pet apparaît en bas à droite, avec une patte dans la barre des menus (Masquer, Vivre dans l'encoche, Position,
-Taille, Quitter). Glisse-le à la souris : sa position est mémorisée. Un clic droit dessus ouvre le même menu.
+Le pet apparaît en bas à droite, et sa silhouette dans la barre des menus. Un clic sur celle-ci ouvre un panneau :
+le pet animé et ce que fait Claude, les trois jauges d'utilisation, puis les réglages (afficher, encoche, quotas du
+compte, taille, coin de l'écran). Échap ou un clic ailleurs le referme, ⌘Q quitte. Glisse le pet à la souris : sa
+position est mémorisée. Un clic droit sur le pet ouvre un menu avec les mêmes réglages.
+L'interface est en français si macOS est en français, en anglais sinon (la langue choisie pour Claude Pet
+dans Réglages système › Langue et région est respectée).
 
 ### Mode encoche
 
-Sur un MacBook à encoche, coche **Vivre dans l'encoche** (⌘N dans le menu). Le pet s'accroupit, s'envole vers
+Sur un MacBook à encoche, active **Vivre dans l'encoche** (panneau de la barre des menus, ou ⌘N dans le clic droit). Le pet s'accroupit, s'envole vers
 l'encoche en s'inclinant, et un cadre noir sort de l'encoche pour le recevoir. Décocher refait le trajet en sens inverse,
 jusqu'à sa dernière position flottante. Le choix est mémorisé au relancement.
 
@@ -65,8 +69,8 @@ renouvelé par l'app elle-même. Les sessions de Claude Desktop ne renouvellent 
 connexion de Desktop). S'il a expiré, l'app demande donc à Claude Code de le faire en lançant `claude -p /usage`, sans
 hooks ni historique, au plus une fois toutes les 10 min. Cette commande n'envoie aucune requête au modèle et ne
 consomme pas de quota (vérifié dans son journal de debug). La requête est un GET vers cette seule
-adresse, sans redirection ni cookie, avec des pauses plus longues en cas d'erreur. Pour couper cette source : menu de la
-patte → **Lire les quotas avec le compte Claude Code**. L'état de la source s'affiche dans ce même menu.
+adresse, sans redirection ni cookie, avec des pauses plus longues en cas d'erreur. Pour couper cette source : panneau de la
+barre des menus → **Quotas du compte**. L'état de la source s'affiche au-dessus des jauges.
 Le cookie de session claude.ai (endpoint `/usage` de Desktop) n'est, lui, jamais utilisé.
 
 `install-hooks.py` remplace la commande de ta ligne de statut par le relais, qui transmet le JSON au pet puis lance ta
@@ -175,7 +179,7 @@ n'envoie pas de `Stop`), et une session muette depuis 3 h est oubliée.
 
 Le pet suit **la session dont l'état est le plus prioritaire** : t'attend > erreur > travaille > réfléchit > content >
 au repos. En cas d'égalité, c'est la plus récemment active qui gagne. Une session qui a besoin de toi n'est donc jamais
-masquée par une autre qui travaille. Le menu affiche le nombre de sessions suivies.
+masquée par une autre qui travaille. Le panneau de la barre des menus affiche le nombre de sessions suivies.
 
 ## Protocole (pour un futur mod)
 
@@ -203,7 +207,8 @@ n'écoute que sur 127.0.0.1 et refuse les requêtes qui portent un en-tête `Ori
   sprite. La souris est suivie par événements quand elle est immobile, par relevés à 30 Hz quand elle bouge, sans
   permission Accessibilité. `scripts/measure-cpu.sh` mesure le CPU et la mémoire par état.
 - `Sources/ClaudePet/EventServer.swift` : serveur HTTP minimal (Network.framework).
-- `Sources/ClaudePet/AppDelegate.swift` : menu de la barre des menus, câblage.
+- `Sources/ClaudePet/ControlPanel.swift` : panneau de la barre des menus, dessiné à la main.
+- `Sources/ClaudePet/AppDelegate.swift` : câblage, menu du clic droit.
 
 Pourquoi un Swift Package plutôt qu'un projet Xcode : il se compile avec `swift build` sans Xcode, il n'y a pas de
 fichier projet à maintenir, et `scripts/bundle.sh` suffit pour produire le `.app` (avec `LSUIElement`).

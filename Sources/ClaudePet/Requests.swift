@@ -71,7 +71,7 @@ final class RequestCenter {
     func deny(_ id: Int) {
         finish(id, output: ["hookSpecificOutput": [
             "hookEventName": "PermissionRequest",
-            "decision": ["behavior": "deny", "message": "Refusé par l'utilisateur depuis Claude Pet."],
+            "decision": ["behavior": "deny", "message": tr("Refusé par l'utilisateur depuis Claude Pet.", "Denied by the user from Claude Pet.")],
         ]])
     }
 
@@ -161,23 +161,23 @@ final class RequestCenter {
         }
         switch tool {
         case "Bash":
-            return .permission(tool: tool, title: "Exécuter une commande", body: string("command") ?? "?", note: string("description"))
+            return .permission(tool: tool, title: tr("Exécuter une commande", "Run a command"), body: string("command") ?? "?", note: string("description"))
         case "Edit", "MultiEdit":
-            return .permission(tool: tool, title: "Modifier un fichier", body: path("file_path"), note: nil)
+            return .permission(tool: tool, title: tr("Modifier un fichier", "Edit a file"), body: path("file_path"), note: nil)
         case "Write":
-            return .permission(tool: tool, title: "Écrire un fichier", body: path("file_path"), note: nil)
+            return .permission(tool: tool, title: tr("Écrire un fichier", "Write a file"), body: path("file_path"), note: nil)
         case "NotebookEdit":
-            return .permission(tool: tool, title: "Modifier un notebook", body: path("notebook_path"), note: nil)
+            return .permission(tool: tool, title: tr("Modifier un notebook", "Edit a notebook"), body: path("notebook_path"), note: nil)
         case "WebFetch":
-            return .permission(tool: tool, title: "Ouvrir une page web", body: string("url") ?? "?", note: string("prompt"))
+            return .permission(tool: tool, title: tr("Ouvrir une page web", "Open a web page"), body: string("url") ?? "?", note: string("prompt"))
         case "WebSearch":
-            return .permission(tool: tool, title: "Chercher sur le web", body: string("query") ?? "?", note: nil)
+            return .permission(tool: tool, title: tr("Chercher sur le web", "Search the web"), body: string("query") ?? "?", note: nil)
         case "ExitPlanMode":
-            return .permission(tool: tool, title: "Passer à l'action avec ce plan", body: string("plan") ?? "", note: nil)
+            return .permission(tool: tool, title: tr("Passer à l'action avec ce plan", "Go ahead with this plan"), body: string("plan") ?? "", note: nil)
         default:
             let json = (try? JSONSerialization.data(withJSONObject: input, options: [.sortedKeys, .withoutEscapingSlashes]))
                 .map { String(decoding: $0, as: UTF8.self) } ?? ""
-            return .permission(tool: tool, title: "Utiliser \(tool)", body: json, note: nil)
+            return .permission(tool: tool, title: tr("Utiliser \(tool)", "Use \(tool)"), body: json, note: nil)
         }
     }
 }

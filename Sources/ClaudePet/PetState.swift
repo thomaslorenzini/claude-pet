@@ -22,14 +22,14 @@ enum PetState: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .idle: return "au repos"
-        case .thinking: return "réfléchit"
-        case .working: return "travaille"
-        case .error: return "erreur"
-        case .waiting: return "t'attend"
-        case .happy: return "content"
-        case .waving: return "te fait coucou"
-        case .sleeping: return "dort"
+        case .idle: return tr("au repos", "is idle")
+        case .thinking: return tr("réfléchit", "is thinking")
+        case .working: return tr("travaille", "is working")
+        case .error: return tr("erreur", "hit an error")
+        case .waiting: return tr("t'attend", "is waiting for you")
+        case .happy: return tr("content", "is happy")
+        case .waving: return tr("te fait coucou", "says hi")
+        case .sleeping: return tr("dort", "is asleep")
         }
     }
 }

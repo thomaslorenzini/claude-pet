@@ -64,12 +64,12 @@ final class EventServer {
                 switch state {
                 case .ready:
                     self.port = port
-                    status("écoute sur 127.0.0.1:\(port)")
+                    status(tr("écoute sur", "listening on") + " 127.0.0.1:\(port)")
                     DispatchQueue.main.async { self.onReady?(port) }
                 case .failed(let error):
                     listener?.cancel()
                     guard case .posix(.EADDRINUSE) = error else {
-                        status("erreur port \(port) : \(error)")
+                        status(tr("erreur port \(port) : \(error)", "port \(port) error: \(error)"))
                         return
                     }
                     self.probe(port) { isPet in
@@ -78,7 +78,7 @@ final class EventServer {
                         } else if attempt + 1 < Self.portAttempts, port < UInt16.max {
                             self.listen(on: port + 1, attempt: attempt + 1)
                         } else {
-                            status("aucun port libre entre \(self.preferredPort) et \(port)")
+                            status(tr("aucun port libre entre \(self.preferredPort) et \(port)", "no free port between \(self.preferredPort) and \(port)"))
                         }
                     }
                 default:
@@ -91,7 +91,7 @@ final class EventServer {
             listener.start(queue: queue)
             self.listener = listener
         } catch {
-            status("erreur : \(error)")
+            status(tr("erreur : ", "error: ") + "\(error)")
         }
     }
 

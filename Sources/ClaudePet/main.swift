@@ -7,10 +7,10 @@ if let index = arguments.firstIndex(of: "--export-sprites") {
     let path = index + 1 < arguments.count ? arguments[index + 1] : "sprites-export"
     do {
         try SpriteComposer.export(to: URL(fileURLWithPath: path))
-        print("Sprites exportés dans \(path)")
+        print(tr("Sprites exportés dans ", "Sprites exported to ") + path)
         exit(0)
     } catch {
-        FileHandle.standardError.write(Data("Export impossible : \(error)\n".utf8))
+        FileHandle.standardError.write(Data((tr("Export impossible : ", "Export failed: ") + "\(error)\n").utf8))
         exit(1)
     }
 }

@@ -72,20 +72,20 @@ final class RequestView: NSView, NSTextFieldDelegate {
         subviews.forEach { $0.removeFromSuperview() }
         guard let request, width > 40 else { return }
         var y: CGFloat = 0
-        let more = waiting > 0 ? " · \(waiting) autre\(waiting > 1 ? "s" : "") en attente" : ""
+        let more = waiting > 0 ? " · " + tr("\(waiting) autre\(waiting > 1 ? "s" : "") en attente", "\(waiting) more waiting") : ""
 
         switch request.kind {
         case let .permission(tool, title, body, note):
             y = addLabel(caption([request.project, tool].filter { !$0.isEmpty }.joined(separator: " · ") + more), y: y, width: width)
-            y = addLabel(heading("Claude veut : " + title.lowercased(with: .current)), y: y + 2, width: width)
+            y = addLabel(heading(tr("Claude veut : ", "Claude wants to: ") + title.lowercased(with: .current)), y: y + 2, width: width)
             if !body.isEmpty { y = addCode(body, y: y + 8, width: width) }
             if let note { y = addLabel(detail(note), y: y + 6, width: width, lines: 3) }
             y += 12
             let id = request.id
             addButtons([
-                PillButton(title: "Ignorer", style: .plain) { [weak self] in self?.onDismiss?(id) },
-                PillButton(title: "Refuser", style: .secondary) { [weak self] in self?.onDeny?(id) },
-                PillButton(title: "Autoriser", style: .primary) { [weak self] in self?.onAllow?(id) },
+                PillButton(title: tr("Ignorer", "Ignore"), style: .plain) { [weak self] in self?.onDismiss?(id) },
+                PillButton(title: tr("Refuser", "Deny"), style: .secondary) { [weak self] in self?.onDeny?(id) },
+                PillButton(title: tr("Autoriser", "Allow"), style: .primary) { [weak self] in self?.onAllow?(id) },
             ], y: y, width: width)
 
         case let .questions(questions):
@@ -108,7 +108,7 @@ final class RequestView: NSView, NSTextFieldDelegate {
                 y += h + 6
             }
             let otherRow = PillButton(
-                title: "Autre", style: .option, checked: q.multiSelect ? other : nil, selected: other
+                title: tr("Autre", "Other"), style: .option, checked: q.multiSelect ? other : nil, selected: other
             ) { [weak self] in self?.pickOther() }
             otherRow.frame = CGRect(x: 0, y: y, width: width, height: otherRow.height(for: width))
             addSubview(otherRow)
@@ -116,9 +116,9 @@ final class RequestView: NSView, NSTextFieldDelegate {
             if other { y = addOtherField(y: y, width: width) + 6 }
             y += 6
             let id = request.id
-            var buttons = [PillButton(title: "Ignorer", style: .plain) { [weak self] in self?.onDismiss?(id) }]
+            var buttons = [PillButton(title: tr("Ignorer", "Ignore"), style: .plain) { [weak self] in self?.onDismiss?(id) }]
             if q.multiSelect || other {
-                let confirm = PillButton(title: "Valider", style: .primary, enabled: canConfirm) { [weak self] in self?.confirm() }
+                let confirm = PillButton(title: tr("Valider", "Submit"), style: .primary, enabled: canConfirm) { [weak self] in self?.confirm() }
                 confirmButton = confirm
                 buttons.append(confirm)
             }
@@ -464,7 +464,7 @@ extension RequestView {
         let text = NSMutableAttributedString(string: "●  ", attributes: [
             .font: NSFont.systemFont(ofSize: 9), .foregroundColor: accent, .baselineOffset: 1,
         ])
-        text.append(NSAttributedString(string: "Claude a besoin de vous", attributes: [
+        text.append(NSAttributedString(string: tr("Claude a besoin de vous", "Claude needs you"), attributes: [
             .font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.white,
         ]))
         let label = NSTextField(labelWithAttributedString: text)
@@ -618,7 +618,7 @@ final class OtherField: NSTextField {
         wantsLayer = true
         layer?.backgroundColor = NSColor.white.withAlphaComponent(0.1).cgColor
         layer?.cornerRadius = 8
-        placeholderAttributedString = NSAttributedString(string: "Tapez votre propre réponse ici", attributes: [
+        placeholderAttributedString = NSAttributedString(string: tr("Tapez votre propre réponse ici", "Type your own answer here"), attributes: [
             .font: NSFont.systemFont(ofSize: 12.5), .foregroundColor: NSColor.white.withAlphaComponent(0.4),
         ])
         isEditable = true

@@ -1,6 +1,6 @@
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     static let defaultPort: UInt16 = 47319
 
     private let tracker = SessionTracker()
@@ -10,7 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pet: PetController!
     private var server: EventServer!
     private var statusItem: NSStatusItem!
-    private var serverStatus = "démarrage…"
+    private let panel = ControlPanel()
+    private var serverStatus = tr("démarrage…", "starting…")
     /// One-shot timer to the next moment something changes on its own (see `scheduleWake`).
     private var wakeTimer: Timer?
     private var lastHistoryCheck = Date.distantPast
@@ -29,13 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         pet = PetController()
         pet.view.contextMenuProvider = { [unowned self] in self.buildMenu() }
-        pet.onClick = { [unowned self] in
-            guard self.tracker.display().state == .sleeping else { return }
-            // Woken up: say hello, then fall asleep again 10 s later if nothing happens.
-            self.tracker.poke()
-            self.wavingUntil = Date().addingTimeInterval(Self.waveDuration)
-            self.refresh()
-        }
+        pet.onClick = { [unowned self] in self.wakeUp() }
         pet.show()
         requests.onChange = { [unowned self] in
             self.pet.showRequest(self.requests.current, waiting: max(0, self.requests.queue.count - 1))
@@ -54,11 +49,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: "Claude Pet")
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        menu.delegate = self
-        statusItem.menu = menu
+        if let button = statusItem.button {
+            button.image = StatusIcon.make() ?? NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: nil)
+            button.setAccessibilityLabel("Claude Pet")
+            button.target = self
+            button.action = #selector(statusItemClicked)
+            // On press, like a menu.
+            button.sendAction(on: [.leftMouseDown, .rightMouseDown])
+        }
+        setUpPanel()
 
         let port = ProcessInfo.processInfo.environment["CLAUDE_PET_PORT"].flatMap(UInt16.init) ?? Self.defaultPort
         server = EventServer(preferredPort: port)
@@ -122,6 +121,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Tests: presses a request button by its title, as a click would.
             if let title = control["press"] as? String { self.pet.requestView.press(title) }
             if let text = control["type"] as? String { self.pet.requestView.typeOther(text) }
+            // Tests: opens the menu bar panel, renders it, presses one of its controls.
+            if let open = control["panel"] as? Bool, let button = self.statusItem.button {
+                open ? self.panel.open(from: button) : self.panel.close()
+            }
+            if let path = control["panel_snapshot"] as? String { self.panel.snapshot(to: path) }
+            if let name = control["panel_press"] as? String { self.panel.view.press(name) }
+            // Tests: "light" / "dark" for the panel only, "" follows the system again.
+            if let look = control["panel_appearance"] as? String {
+                self.panel.window.appearance = look.isEmpty ? nil : NSAppearance(named: look == "dark" ? .darkAqua : .aqua)
+                self.panel.view.needsDisplay = true
+                self.panel.view.subviews.forEach { $0.needsDisplay = true; $0.subviews.forEach { $0.needsDisplay = true } }
+            }
         }
         server.stateProvider = { [unowned self] in
             var snapshot = self.tracker.snapshot()
@@ -187,19 +198,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pet.updateGauges(quotas.gauges(
             leader: leader?.id,
             leaderFolder: leader?.cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
-        ))
+        ).map { ($0.value, $0.detail) })
+        panel.refresh()
         scheduleWake()
     }
 
-    // MARK: Menu
-
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        buildMenu().items.forEach { item in
-            item.menu?.removeItem(item)
-            menu.addItem(item)
-        }
+    /// Clicking the sleeping pet (or its picture in the panel) wakes it: it says hello, then falls asleep
+    /// again 10 s later if nothing happens.
+    private func wakeUp() {
+        guard tracker.display().state == .sleeping else { return }
+        tracker.poke()
+        wavingUntil = Date().addingTimeInterval(Self.waveDuration)
+        refresh()
     }
+
+    // MARK: Menu bar panel
+
+    @objc private func statusItemClicked() {
+        guard let button = statusItem.button else { return }
+        panel.toggle(from: button)
+    }
+
+    private func setUpPanel() {
+        panel.modelProvider = { [unowned self] in self.panelModel() }
+        let view = panel.view
+        view.onToggleVisible = { [unowned self] in
+            self.pet.isVisible ? self.pet.hide() : self.pet.show()
+            self.panel.refresh()
+        }
+        view.onToggleNotch = { [unowned self] in
+            self.pet.setNotchMode(!self.pet.wantsNotch)
+            self.panel.refresh()
+            // The flight takes about a second: show where the pet landed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.panel.refresh() }
+        }
+        view.onToggleUsageAPI = { [unowned self] in
+            OAuthUsageSource.isEnabled.toggle()
+            OAuthUsageSource.isEnabled ? self.usageAPI.start() : self.usageAPI.stop()
+            self.panel.refresh()
+        }
+        view.onScale = { [unowned self] in
+            self.pet.setScale($0)
+            self.panel.refresh()
+        }
+        view.onCorner = { [unowned self] in
+            self.pet.move(to: $0)
+            self.panel.refresh()
+        }
+        view.onPoke = { [unowned self] in self.wakeUp() }
+        view.onQuit = { NSApp.terminate(nil) }
+    }
+
+    private func panelModel() -> ControlPanelView.Model {
+        var m = ControlPanelView.Model()
+        var display = tracker.display()
+        if let until = wavingUntil, Date() < until, display.state == .idle || display.state == .sleeping {
+            display = (.waving, nil)
+        }
+        let leader = tracker.leader
+        let folder = leader?.cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
+        m.state = display.state
+        m.tool = display.tool
+        m.toolName = display.state == .working ? leader?.toolName : nil
+        m.project = folder
+        m.sessions = tracker.sessions.count
+        m.gauges = quotas.gauges(leader: leader?.id, leaderFolder: folder)
+        var usage = tr("Compte : ", "Account: ") + usageAPI.status
+        if let last = usageAPI.lastSuccess, !usageAPI.isUpToDate {
+            usage += tr(" · il y a \(QuotaStore.duration(last, Date()))", " · \(QuotaStore.duration(last, Date())) ago")
+        }
+        m.usageStatus = usage
+        m.petVisible = pet.isVisible
+        m.notch = pet.wantsNotch
+        m.notchAvailable = pet.notchAvailable
+        m.transitioning = pet.isTransitioning
+        m.usageAPI = OAuthUsageSource.isEnabled
+        m.scale = pet.scale
+        if pet.mode == .floating, let screen = pet.panel.screen ?? NSScreen.main {
+            let area = screen.visibleFrame, frame = pet.panel.frame
+            let free = CGSize(width: max(1, area.width - frame.width), height: max(1, area.height - frame.height))
+            m.spot = CGPoint(x: (frame.minX - area.minX) / free.width, y: (frame.minY - area.minY) / free.height)
+        }
+        if let port = server.port {
+            m.server = tr("En écoute", "Listening") + " · 127.0.0.1:\(port)"
+        } else {
+            m.server = serverStatus.prefix(1).uppercased() + serverStatus.dropFirst()
+            m.serverOK = false
+        }
+        return m
+    }
+
+    // MARK: Pet's context menu
 
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
@@ -209,27 +298,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let tool = tracker.leader?.toolName, display.state == .working { status += " (\(tool))" }
         menu.addItem(disabled: status)
         let count = tracker.sessions.count
-        menu.addItem(disabled: count == 1 ? "1 session suivie" : "\(count) sessions suivies")
-        menu.addItem(disabled: "Serveur : \(serverStatus)")
-        var quotaStatus = "Quotas (API) : \(usageAPI.status)"
-        if let last = usageAPI.lastSuccess, usageAPI.status != "à jour" {
-            quotaStatus += ", dernier succès il y a \(QuotaStore.duration(last, Date()))"
+        menu.addItem(disabled: tr(count == 1 ? "1 session suivie" : "\(count) sessions suivies", count == 1 ? "1 session tracked" : "\(count) sessions tracked"))
+        menu.addItem(disabled: tr("Serveur : ", "Server: ") + serverStatus)
+        var quotaStatus = tr("Quotas (API) : ", "Quotas (API): ") + usageAPI.status
+        if let last = usageAPI.lastSuccess, !usageAPI.isUpToDate {
+            quotaStatus += tr(", dernier succès il y a \(QuotaStore.duration(last, Date()))", ", last success \(QuotaStore.duration(last, Date())) ago")
         }
         menu.addItem(disabled: quotaStatus)
         menu.addItem(.separator())
 
-        menu.addItem(action: pet.isVisible ? "Masquer" : "Afficher", key: "h") { [unowned self] in
+        menu.addItem(action: pet.isVisible ? tr("Masquer", "Hide") : tr("Afficher", "Show"), key: "h") { [unowned self] in
             self.pet.isVisible ? self.pet.hide() : self.pet.show()
         }
 
         let notchAvailable = pet.notchAvailable
-        let notchItem = menu.addItem(action: notchAvailable ? "Vivre dans l'encoche" : "Vivre dans l'encoche (aucune encoche)", key: "n") { [unowned self] in
+        let notchItem = menu.addItem(action: notchAvailable ? tr("Vivre dans l'encoche", "Live in the notch") : tr("Vivre dans l'encoche (aucune encoche)", "Live in the notch (no notch)"), key: "n") { [unowned self] in
             self.pet.setNotchMode(!self.pet.wantsNotch)
         }
         notchItem.state = pet.wantsNotch ? .on : .off
         notchItem.isEnabled = notchAvailable && !pet.isTransitioning
 
-        let apiItem = menu.addItem(action: "Lire les quotas avec le compte Claude Code") { [unowned self] in
+        let apiItem = menu.addItem(action: tr("Lire les quotas avec le compte Claude Code", "Read quotas with the Claude Code account")) { [unowned self] in
             OAuthUsageSource.isEnabled.toggle()
             OAuthUsageSource.isEnabled ? self.usageAPI.start() : self.usageAPI.stop()
         }
@@ -238,23 +327,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let docked = pet.mode != .floating
         let position = NSMenu()
         let corners: [(String, PetController.Corner)] = [
-            ("En bas à droite", .bottomRight), ("En bas à gauche", .bottomLeft),
-            ("En haut à droite", .topRight), ("En haut à gauche", .topLeft),
+            (tr("En bas à droite", "Bottom right"), .bottomRight), (tr("En bas à gauche", "Bottom left"), .bottomLeft),
+            (tr("En haut à droite", "Top right"), .topRight), (tr("En haut à gauche", "Top left"), .topLeft),
         ]
         for (title, corner) in corners {
             position.addItem(action: title) { [unowned self] in self.pet.move(to: corner) }
         }
-        menu.addItem(submenu: position, title: "Position").isEnabled = !docked
+        menu.addItem(submenu: position, title: tr("Position", "Position")).isEnabled = !docked
 
         let size = NSMenu()
         for scale in 3...8 {
             let item = size.addItem(action: "×\(scale)") { [unowned self] in self.pet.setScale(scale) }
             item.state = scale == pet.scale ? .on : .off
         }
-        menu.addItem(submenu: size, title: "Taille")
+        menu.addItem(submenu: size, title: tr("Taille", "Size"))
 
         menu.addItem(.separator())
-        menu.addItem(action: "Quitter Claude Pet", key: "q") { NSApp.terminate(nil) }
+        menu.addItem(action: tr("Quitter Claude Pet", "Quit Claude Pet"), key: "q") { NSApp.terminate(nil) }
         return menu
     }
 }

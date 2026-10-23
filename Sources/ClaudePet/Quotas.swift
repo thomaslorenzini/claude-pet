@@ -17,9 +17,9 @@ final class QuotaStore {
 
         var label: String {
             switch self {
-            case .statusLine: return "ligne de statut"
+            case .statusLine: return tr("ligne de statut", "status line")
             case .desktopHistory: return "Claude Desktop"
-            case .oauthAPI: return "API Anthropic"
+            case .oauthAPI: return tr("API Anthropic", "Anthropic API")
             }
         }
     }
@@ -142,34 +142,50 @@ final class QuotaStore {
         return contexts.values.max { $0.updated < $1.updated }
     }
 
-    /// Fraction 0…1 (nil when unknown) and a detail line, for each gauge.
-    func gauges(leader: String?, leaderFolder: String?, now: Date = Date()) -> [(value: Double?, detail: String)] {
-        func quota(_ name: String, _ w: Window?, length: TimeInterval) -> (Double?, String) {
-            guard let w else { return (nil, "\(name) : pas encore de données") }
+    /// One gauge: fraction 0…1 (nil when unknown), the detail line under the notch box, and a short
+    /// title and note for the menu bar panel.
+    struct Reading {
+        var title: String
+        var value: Double?
+        var detail: String
+        var note: String
+    }
+
+    func gauges(leader: String?, leaderFolder: String?, now: Date = Date()) -> [Reading] {
+        func quota(_ name: String, _ title: String, _ w: Window?, length: TimeInterval) -> Reading {
+            guard let w else { return Reading(title: title, detail: name + tr(" : pas encore de données", ": no data yet"), note: tr("pas de données", "no data")) }
             let age = now.timeIntervalSince(w.updated)
             if let reset = w.resetsAt, reset <= now {
-                return (nil, "\(name) : fenêtre réinitialisée, en attente de nouvelles données")
+                return Reading(title: title, detail: name + tr(" : fenêtre réinitialisée, en attente de nouvelles données", ": window reset, waiting for new data"), note: tr("réinitialisé", "reset"))
             }
             if w.resetsAt == nil, age > length {
-                return (nil, "\(name) : pas de donnée récente (\(Self.duration(w.updated, now)), \(w.source.label))")
+                return Reading(title: title, detail: name + tr(" : pas de donnée récente", ": no recent data") + " (\(Self.duration(w.updated, now)), \(w.source.label))",
+                               note: tr("donnée périmée", "stale data"))
             }
-            var text = "\(name) : \(Self.percent(w.usedPercentage))"
-            if let reset = w.resetsAt { text += " · reset dans \(Self.duration(now, reset))" }
-            if age > 10 * 60 { text += " · il y a \(Self.duration(w.updated, now)) (\(w.source.label))" }
-            return (min(1, w.usedPercentage / 100), text)
+            var text = name + tr(" : ", ": ") + Self.percent(w.usedPercentage)
+            var note = tr("à jour", "up to date")
+            if let reset = w.resetsAt {
+                text += tr(" · reset dans ", " · resets in ") + Self.duration(now, reset)
+                note = tr("reset · ", "resets in ") + Self.duration(now, reset)
+            }
+            if age > 10 * 60 { text += tr(" · il y a \(Self.duration(w.updated, now))", " · \(Self.duration(w.updated, now)) ago") + " (\(w.source.label))" }
+            return Reading(title: title, value: min(1, w.usedPercentage / 100), detail: text, note: note)
         }
 
-        let five = quota("Quota 5 h", fiveHour, length: 5 * 3600)
-        let weekly = quota("Quota semaine", week, length: 7 * 86400)
-        let ctx: (Double?, String)
+        let five = quota(tr("Quota 5 h", "5-hour quota"), tr("5 heures", "5 hours"), fiveHour, length: 5 * 3600)
+        let weekly = quota(tr("Quota semaine", "Weekly quota"), tr("Semaine", "Week"), week, length: 7 * 86400)
+        let ctx: Reading
         if let c = context(for: leader) {
-            var text = "Contexte : \(c.estimated ? "≈ " : "")\(Self.percent(c.usedPercentage))"
-            if let size = c.size { text += " de \(size >= 1_000_000 ? "\(size / 1_000_000)M" : "\(size / 1000)k")" }
-            if c.estimated { text += " (estimé)" }
+            var text = tr("Contexte : ", "Context: ") + (c.estimated ? "≈ " : "") + Self.percent(c.usedPercentage)
+            var size = ""
+            if let s = c.size { size = s >= 1_000_000 ? "\(s / 1_000_000)M" : "\(s / 1000)k" }
+            if !size.isEmpty { text += tr(" de ", " of ") + size }
+            if c.estimated { text += tr(" (estimé)", " (estimated)") }
             if let leaderFolder { text += " · \(leaderFolder)" }
-            ctx = (min(1, c.usedPercentage / 100), text)
+            let note = [c.estimated ? tr("estimé", "estimated") : nil, size.isEmpty ? nil : tr("sur ", "of ") + size].compactMap { $0 }.joined(separator: " ")
+            ctx = Reading(title: tr("Contexte", "Context"), value: min(1, c.usedPercentage / 100), detail: text, note: note)
         } else {
-            ctx = (nil, "Contexte : pas encore de données")
+            ctx = Reading(title: tr("Contexte", "Context"), detail: tr("Contexte : pas encore de données", "Context: no data yet"), note: tr("pas de données", "no data"))
         }
         return [five, weekly, ctx]
     }
@@ -206,15 +222,15 @@ final class QuotaStore {
     }
 
     private static func percent(_ value: Double) -> String {
-        value > 0 && value < 1 ? "<1 %" : "\(Int(value.rounded())) %"
+        value > 0 && value < 1 ? tr("<1 %", "<1%") : "\(Int(value.rounded()))" + tr(" %", "%")
     }
 
-    /// "45 min", "2 h 05", "3 j 4 h".
+    /// "45 min", "2 h 05", "3 j 4 h" (English: "45 min", "2h 05", "3d 4h").
     static func duration(_ from: Date, _ to: Date) -> String {
         let s = max(0, Int(to.timeIntervalSince(from)))
         let d = s / 86400, h = (s % 86400) / 3600, m = (s % 3600) / 60
-        if d > 0 { return h > 0 ? "\(d) j \(h) h" : "\(d) j" }
-        if h > 0 { return String(format: "%d h %02d", h, m) }
+        if d > 0 { return h > 0 ? tr("\(d) j \(h) h", "\(d)d \(h)h") : tr("\(d) j", "\(d)d") }
+        if h > 0 { return String(format: tr("%d h %02d", "%dh %02d"), h, m) }
         return "\(max(1, m)) min"
     }
 }
