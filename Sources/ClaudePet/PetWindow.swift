@@ -154,7 +154,6 @@ final class PetView: NSView {
 /// `dropping` once released) stretches the panel over the screen(s), so the sprite and the box are
 /// drawn by one view and always move in sync.
 final class PetController: NSObject {
-    static let fps: Double = 4
     private static let originKey = "petOrigin"
     private static let scaleKey = "petScale"
     private static let notchKey = "petInNotch"
@@ -204,6 +203,9 @@ final class PetController: NSObject {
     private(set) var tool: ToolKind?
     private(set) var mode = Mode.floating
     private var t = 0
+    /// When the pet last stopped typing, to skip taking the laptop out again on the next command.
+    private var typingStoppedAt: CFTimeInterval?
+    private static let typingResumeWindow: CFTimeInterval = 4
     private var animationTimer: Timer?
     private var mouseMonitors: [Any] = []
     private var mousePoll: Timer?
@@ -275,26 +277,36 @@ final class PetController: NSObject {
 
     func update(state: PetState, tool: ToolKind?) {
         guard state != self.state || tool != self.tool else { return }
+        let now = CACurrentMediaTime()
+        if SpriteComposer.typesOnLaptop(state: self.state, tool: self.tool) { typingStoppedAt = now }
         self.state = state
         self.tool = tool
         t = 0
+        // Tools one after another: Claude thinks briefly between them, the pet goes straight back to typing.
+        if SpriteComposer.typesOnLaptop(state: state, tool: tool),
+           let stopped = typingStoppedAt, now - stopped < Self.typingResumeWindow {
+            t = SpriteComposer.laptopIntro
+        }
         render()
         syncAnimation()
     }
 
-    /// The 4 fps animation runs only while awake: asleep the frame never changes, so nothing ticks.
+    /// The animation (4 fps, faster while typing) runs only while awake: asleep the frame never changes,
+    /// so nothing ticks.
     private func syncAnimation() {
-        if state == .sleeping {
+        let interval = 1 / SpriteComposer.fps(state: state, tool: tool)
+        if state == .sleeping || animationTimer?.timeInterval != interval {
             animationTimer?.invalidate()
             animationTimer = nil
-        } else if animationTimer == nil {
-            let timer = Timer(timeInterval: 1 / Self.fps, repeats: true) { [weak self] _ in
+        }
+        if state != .sleeping, animationTimer == nil {
+            let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
                 guard let self else { return }
                 self.t += 1
                 self.render()
             }
-            // Lets macOS batch this wakeup with others; 50 ms of jitter is invisible at 4 fps.
-            timer.tolerance = 0.05
+            // Lets macOS batch this wakeup with others; 20 % of a frame of jitter is invisible.
+            timer.tolerance = interval * 0.2
             RunLoop.main.add(timer, forMode: .common)
             animationTimer = timer
         }
