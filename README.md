@@ -34,6 +34,19 @@ jusqu'à sa dernière position flottante. Le choix est mémorisé au relancement
 - Le cadre déplié recouvre temporairement les icônes de barre des menus qui sont juste à droite de l'encoche.
 - Si l'encoche disparaît (écran externe seul, capot fermé), le pet revient en mode flottant.
 
+### Glisser-déposer vers l'encoche et hors de l'encoche
+
+On peut aussi changer de mode à la main, sans le menu :
+
+- **Vers l'encoche** : attrape le pet et approche-le de l'encoche. Plus il s'en approche, plus il rétrécit, et le cadre
+  noir commence à sortir de l'encoche. Assez près, un retour haptique signale la zone de dépôt, le cadre gonfle et le
+  pet est aimanté vers sa place. Lâche-le : il glisse dans le cadre, s'écrase un instant (« plop ») et le cadre se
+  rétracte sur lui.
+- **Hors de l'encoche** : attrape le pet (ou le cadre) et tire-le. Il reste un peu collé avant de se détacher, reprend
+  sa taille normale en s'éloignant, et le cadre rentre dans l'encoche. Lâché hors de la zone, il atterrit là où tu le
+  poses, toujours entièrement à l'écran et sous la barre des menus.
+- Pendant le drag, le pet s'incline selon sa vitesse horizontale. Un simple clic lui fait faire un petit rebond.
+
 Pour une vraie app (sans icône Dock, lançable depuis le Finder ou au login) :
 
 ```bash

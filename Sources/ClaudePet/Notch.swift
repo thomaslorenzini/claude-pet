@@ -28,6 +28,12 @@ struct Spring {
 
 func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { a + (b - a) * t }
 
+/// 0 below `edge0`, 1 above `edge1`, smooth in between.
+func smoothstep(_ edge0: CGFloat, _ edge1: CGFloat, _ x: CGFloat) -> CGFloat {
+    let t = min(1, max(0, (x - edge0) / (edge1 - edge0)))
+    return t * t * (3 - 2 * t)
+}
+
 /// Where the notch is, and the black "ear" box glued to its right side.
 ///
 /// The box starts `overlap` points *inside* the notch: there are no pixels there, so the junction

@@ -84,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.pet.setNotchMode(!self.pet.wantsNotch)
         }
         notchItem.state = pet.wantsNotch ? .on : .off
-        notchItem.isEnabled = notchAvailable && !pet.isFlying
+        notchItem.isEnabled = notchAvailable && !pet.isTransitioning
 
         let docked = pet.mode != .floating
         let position = NSMenu()
