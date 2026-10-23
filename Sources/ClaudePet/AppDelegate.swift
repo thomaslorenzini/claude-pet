@@ -43,7 +43,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pet.requestView.onAllow = { [unowned self] in self.requests.allow($0) }
         pet.requestView.onDeny = { [unowned self] in self.requests.deny($0) }
         pet.requestView.onAnswer = { [unowned self] in self.requests.answer($0, $1) }
-        pet.requestView.onDismiss = { [unowned self] in self.requests.dismiss($0) }
+        pet.requestView.onDismiss = { [unowned self] id in
+            // "Ignorer": Claude's dialog keeps the request, the pet stops alerting for it.
+            if let request = self.requests.queue.first(where: { $0.id == id }),
+               !self.requests.queue.contains(where: { $0.session == request.session && $0.id != id }) {
+                self.tracker.setAside(session: request.session, toolName: request.tool)
+            }
+            self.requests.dismiss(id)
+            self.refresh()
+        }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: "Claude Pet")

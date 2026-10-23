@@ -66,6 +66,9 @@ struct SessionInfo {
     /// Transient states (happy, error) revert to `stateAfter` at this date.
     var transientUntil: Date?
     var stateAfter: PetState = .idle
+    /// The user set this session's request aside in the pet ("Ignorer"): no alert for it until the
+    /// session moves on, not even from the reminder notification Claude Code sends a bit later.
+    var setAside = false
 }
 
 /// Turns hook events into per-session states, then aggregates them into one display state.
@@ -87,6 +90,25 @@ final class SessionTracker {
     private(set) var sessions: [String: SessionInfo] = [:]
     private(set) var lastActivity = Date()
 
+    /// The user set a request aside in the pet: it still waits in Claude's own dialog, but the pet
+    /// stops alerting. A tool goes back to working on it; a question goes back to thinking.
+    func setAside(session id: String, toolName: String, now: Date = Date()) {
+        guard var s = sessions[id], s.state == .waiting else { return }
+        s.setAside = true
+        s.transientUntil = nil
+        if toolName == "AskUserQuestion" {
+            s.state = .thinking
+            s.tool = nil
+            s.toolName = nil
+        } else {
+            s.state = .working
+            s.tool = ToolKind(toolName: toolName)
+            s.toolName = toolName
+        }
+        sessions[id] = s
+        lastActivity = now
+    }
+
     /// Counts as activity without changing any session: a click restarts the sleep countdown.
     func poke(now: Date = Date()) {
         lastActivity = now
@@ -104,6 +126,7 @@ final class SessionTracker {
 
         var s = sessions[id] ?? SessionInfo(id: id, state: .idle, lastEvent: now)
         s.lastEvent = now
+        if name != "Notification" { s.setAside = false }
         if let cwd = event["cwd"] as? String { s.cwd = cwd }
         let toolName = event["tool_name"] as? String
 
@@ -156,7 +179,7 @@ final class SessionTracker {
             let type = event["notification_type"] as? String
             if type == "idle_prompt" || type == "auth_success" {
                 if s.state != .waiting { set(.idle) }
-            } else {
+            } else if !s.setAside {
                 set(.waiting)
             }
         case "Stop":
