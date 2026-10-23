@@ -260,6 +260,13 @@ final class PetController: NSObject {
         }
     }
 
+    /// Live tuning of the box corners, to match the physical notch by eye.
+    func tuneNotch(radius: CGFloat?, ear: CGFloat?) {
+        if let radius { UserDefaults.standard.set(Double(radius), forKey: NotchGeometry.radiusKey) }
+        if let ear { UserDefaults.standard.set(Double(ear), forKey: NotchGeometry.earKey) }
+        if mode == .notch { layoutNotch() }
+    }
+
     private func dock(in geometry: NotchGeometry, settleBox: Bool = false) {
         notch = geometry
         mode = .notch

@@ -25,8 +25,13 @@ l'encoche en s'inclinant, et un cadre noir sort de l'encoche pour le recevoir. D
 jusqu'à sa dernière position flottante. Le choix est mémorisé au relancement.
 
 - Le cadre commence 14 pt *sous* l'encoche, où l'écran n'a pas de pixels : la jonction avec l'encoche physique, coin
-  arrondi compris, est invisible. Il a la hauteur exacte de l'encoche (`safeAreaInsets.top`) et un petit arrondi
-  concave en haut à droite, comme celui de l'encoche.
+  arrondi compris, est invisible. Replié, il a la hauteur exacte de l'encoche (`safeAreaInsets.top`).
+- Ses coins ont les rayons de l'encoche native, quelle que soit sa taille : 10 pt en bas (aussi pour le raccord concave
+  sous l'encoche quand il est déplié) et 6 pt pour le petit arrondi concave en haut. Ce sont de vrais arcs de cercle.
+  Pour s'ouvrir, il glisse de derrière l'encoche au lieu de s'élargir, donc ses coins restent intacts.
+- macOS n'expose pas la forme de l'encoche, donc ces rayons sont estimés. Pour les ajuster à l'œil, compare avec le
+  coin inférieur gauche de l'encoche : `curl -d '{"notch_radius": 11, "notch_ear": 5}' 127.0.0.1:47319/control`
+  (la valeur est mémorisée).
 - Dans l'encoche, le pet utilise un sprite compact (le corps recadré, avec l'icône d'état à côté au lieu d'une bulle),
   ce qui permet de le dessiner à l'échelle 2 dans 32 pt.
 - Au survol : retour haptique (`NSHapticFeedbackManager`, seulement si le doigt est posé sur un trackpad Force Touch),
@@ -119,7 +124,8 @@ masquée par une autre qui travaille. Le menu affiche le nombre de sessions suiv
   `pet_state` prend `idle|thinking|working|error|waiting|happy|sleeping`, `pet_tool` prend `bash|edit|read|web|agent|other`,
   et `pet_duration` (en secondes, facultatif) ramène ensuite la session au repos.
 
-`POST /control` règle l'app : `{"notch": true}` ou `{"notch": false}` (avec l'animation).
+`POST /control` règle l'app : `{"notch": true}` ou `{"notch": false}` (avec l'animation), `notch_radius` et
+`notch_ear` (rayons du cadre, en points).
 
 `GET /state` renvoie l'état agrégé, les sessions et `notch`, `GET /health` permet de vérifier que l'app tourne. Le serveur
 n'écoute que sur 127.0.0.1 et refuse les requêtes qui portent un en-tête `Origin` (pages web).

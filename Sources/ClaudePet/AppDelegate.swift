@@ -30,10 +30,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         server.onControl = { [unowned self] control in
             if let notch = control["notch"] as? Bool { self.pet.setNotchMode(notch) }
+            let radius = (control["notch_radius"] as? Double).map { CGFloat($0) }
+            let ear = (control["notch_ear"] as? Double).map { CGFloat($0) }
+            if radius != nil || ear != nil { self.pet.tuneNotch(radius: radius, ear: ear) }
         }
         server.stateProvider = { [unowned self] in
             var snapshot = self.tracker.snapshot()
             snapshot["notch"] = self.pet.mode != .floating
+            snapshot["notch_radius"] = Double(NotchGeometry.bottomRadius)
+            snapshot["notch_ear"] = Double(NotchGeometry.earRadius)
             return snapshot
         }
         server.onStatusChange = { [unowned self] status in
