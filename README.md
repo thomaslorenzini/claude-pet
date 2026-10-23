@@ -175,8 +175,9 @@ n'écoute que sur 127.0.0.1 et refuse les requêtes qui portent un en-tête `Ori
   de vrais assets.
 - `Sources/ClaudePet/Notch.swift` : géométrie de l'encoche, forme du cadre noir, ressorts.
 - `Sources/ClaudePet/PetWindow.swift` : NSPanel non activant, transparent, au-dessus de la barre des menus, sur tous
-  les Spaces et en plein écran. Modes flottant / encoche et vol entre les deux. Il laisse passer les clics partout sauf sur les pixels opaques du sprite (le curseur est interrogé
-  30 fois par seconde, sans permission Accessibilité).
+  les Spaces et en plein écran. Modes flottant / encoche et vol entre les deux. Il laisse passer les clics partout sauf sur les pixels opaques du
+  sprite. La souris est suivie par événements quand elle est immobile, par relevés à 30 Hz quand elle bouge, sans
+  permission Accessibilité. `scripts/measure-cpu.sh` mesure le CPU et la mémoire par état.
 - `Sources/ClaudePet/EventServer.swift` : serveur HTTP minimal (Network.framework).
 - `Sources/ClaudePet/AppDelegate.swift` : menu de la barre des menus, câblage.
 
