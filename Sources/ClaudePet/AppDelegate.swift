@@ -88,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             snapshot["port"] = self.server.port.map { Int($0) } ?? NSNull()
             snapshot["quotas"] = self.quotas.snapshot()
             snapshot["usage_api"] = self.usageAPI.status
+            snapshot["usage_token_expires_at"] = self.usageAPI.tokenExpiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
             snapshot["notch"] = self.pet.mode != .floating
             snapshot["click_through"] = self.pet.panel.ignoresMouseEvents
             snapshot["notch_radius"] = Double(NotchGeometry.bottomRadius)

@@ -21,6 +21,10 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
     var onUpdate: ((QuotaStore.Window?, QuotaStore.Window?) -> Void)?
     private(set) var status = "pas encore interrogée"
     private(set) var lastSuccess: Date?
+    /// Expiry of the token last read from the Keychain (not secret), for diagnostics.
+    private(set) var tokenExpiresAt: Date?
+    /// While the token is expired, only the Keychain is re-read (local, free): no request is sent.
+    private static let expiredRecheck: TimeInterval = 60
 
     private var token: (value: String, expiresAt: Date?)?
     private var timer: Timer?
@@ -81,9 +85,12 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
             }
         }
         guard let token else { return }
+        tokenExpiresAt = token.expiresAt
         if let expiry = token.expiresAt, expiry < Date() {
+            // Not a server failure: no backoff, just look at the Keychain again soon.
             self.token = nil
-            fail("jeton expiré, en attente que Claude Code le renouvelle")
+            status = "jeton expiré depuis \(QuotaStore.duration(expiry, Date())), en attente que Claude Code le renouvelle"
+            schedule(after: Self.expiredRecheck)
             return
         }
         var request = URLRequest(url: Self.url)
@@ -119,9 +126,10 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
             onUpdate?(five, week)
             schedule(after: Self.interval)
         case 401:
-            // Claude Code may have renewed the token since: read it again next time.
+            // Claude Code may have renewed the token since: read it again soon.
             token = nil
-            fail("jeton refusé, en attente que Claude Code le renouvelle")
+            status = "jeton refusé, en attente que Claude Code le renouvelle"
+            schedule(after: Self.expiredRecheck)
         case 403:
             fail("pas d'abonnement Pro/Max, ou OAuth désactivé par l'organisation", retryIn: 3600)
         case 429:
