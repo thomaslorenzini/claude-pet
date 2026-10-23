@@ -7,8 +7,10 @@ import Security
 /// Safety rules:
 /// - The token is read from the Keychain item Claude Code owns ("Claude Code-credentials"); macOS
 ///   asks the user before the first read. It stays in memory only, is never logged or written.
-/// - It is never refreshed here: rewriting Claude Code's credentials could break its own login. An
-///   expired token just means waiting until Claude Code renews it.
+/// - It is never refreshed or written here: rewriting Claude Code's credentials could break its own
+///   login. When it has expired (Claude Desktop sessions use their own auth and never renew it), the
+///   app asks Claude Code to renew it the way any new session would: `claude -p /usage` (see
+///   `CLIRenewal`), then reads the Keychain again.
 /// - GET only, to one fixed URL, no redirects, no cookies, every 5 minutes, backing off on errors.
 final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
     static let enabledKey = "usageAPIEnabled"
@@ -51,6 +53,12 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
         schedule(after: 2)
     }
 
+    /// Asks Claude Code to renew its token now (`POST /control {"renew_usage_token": true}`), for tests.
+    func renewNow() {
+        token = nil
+        CLIRenewal.run(force: true) { [weak self] in self?.schedule(after: 1) }
+    }
+
     func stop() {
         timer?.invalidate()
         timer = nil
@@ -87,10 +95,12 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
         guard let token else { return }
         tokenExpiresAt = token.expiresAt
         if let expiry = token.expiresAt, expiry < Date() {
-            // Not a server failure: no backoff, just look at the Keychain again soon.
+            // Not a server failure: no backoff. Let Claude Code renew it, then look at the Keychain again.
             self.token = nil
-            status = "jeton expiré depuis \(QuotaStore.duration(expiry, Date())), en attente que Claude Code le renouvelle"
-            schedule(after: Self.expiredRecheck)
+            status = "jeton expiré depuis \(QuotaStore.duration(expiry, Date())), renouvellement par Claude Code…"
+            if !CLIRenewal.run(completion: { [weak self] in self?.schedule(after: 1) }) {
+                schedule(after: Self.expiredRecheck)
+            }
             return
         }
         var request = URLRequest(url: Self.url)
@@ -206,5 +216,60 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
         }
         let expiry = (login["expiresAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
         return .success((value, expiry))
+    }
+}
+
+/// Lets Claude Code renew its own OAuth token by running `claude -p /usage`: the same code path as any
+/// new CLI session, no model request (/usage only reads the quotas), no hooks, no saved session.
+/// The environment is clean on purpose: inherited from a Claude Desktop session, the CLI would use
+/// Desktop's auth instead of its own Keychain login.
+enum CLIRenewal {
+    /// At most one run per 10 minutes, whatever happens.
+    private static let minInterval: TimeInterval = 10 * 60
+    private static var lastRun: Date?
+    private static var running = false
+
+    /// Returns false when nothing was started (already running, too soon, or no `claude` found).
+    @discardableResult
+    static func run(force: Bool = false, completion: @escaping () -> Void) -> Bool {
+        guard !running, force || lastRun.map({ Date().timeIntervalSince($0) >= minInterval }) ?? true,
+              let claude = executable() else { return false }
+        running = true
+        lastRun = Date()
+        let process = Process()
+        process.executableURL = claude
+        process.arguments = ["-p", "/usage", "--no-session-persistence", "--settings", #"{"disableAllHooks":true}"#]
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let user = NSUserName()
+        process.environment = [
+            "HOME": home, "USER": user, "LOGNAME": user, "TERM": "dumb",
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:" + claude.deletingLastPathComponent().path,
+        ]
+        process.currentDirectoryURL = FileManager.default.temporaryDirectory
+        // The output (quotas, account) is not needed: the app reads the API itself afterwards.
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        process.terminationHandler = { _ in
+            DispatchQueue.main.async {
+                running = false
+                completion()
+            }
+        }
+        do {
+            try process.run()
+        } catch {
+            running = false
+            return false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { if process.isRunning { process.terminate() } }
+        return true
+    }
+
+    private static func executable() -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return ["\(home)/.local/bin/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude", "\(home)/.claude/local/claude"]
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+            .map { URL(fileURLWithPath: $0) }
     }
 }

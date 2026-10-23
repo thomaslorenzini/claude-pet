@@ -61,7 +61,10 @@ vide), jamais comme 0 %.
 **L'API d'usage et ton Trousseau.** Pour l'API, l'app lit le jeton de connexion que Claude Code range dans le
 Trousseau (« Claude Code-credentials »). macOS demande ton accord au premier accès. L'app étant signée localement, il le
 redemandera sans doute après chaque recompilation. Le jeton reste en mémoire : il n'est jamais écrit, ni journalisé, ni
-renouvelé par l'app (s'il expire, elle attend que Claude Code le renouvelle). La requête est un GET vers cette seule
+renouvelé par l'app elle-même. Les sessions de Claude Desktop ne renouvellent pas ce jeton (elles utilisent la
+connexion de Desktop). S'il a expiré, l'app demande donc à Claude Code de le faire en lançant `claude -p /usage`, sans
+hooks ni historique, au plus une fois toutes les 10 min. Cette commande n'envoie aucune requête au modèle et ne
+consomme pas de quota (vérifié dans son journal de debug). La requête est un GET vers cette seule
 adresse, sans redirection ni cookie, avec des pauses plus longues en cas d'erreur. Pour couper cette source : menu de la
 patte → **Lire les quotas avec le compte Claude Code**. L'état de la source s'affiche dans ce même menu.
 Le cookie de session claude.ai (endpoint `/usage` de Desktop) n'est, lui, jamais utilisé.

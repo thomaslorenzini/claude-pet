@@ -82,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let radius = (control["notch_radius"] as? Double).map { CGFloat($0) }
             let ear = (control["notch_ear"] as? Double).map { CGFloat($0) }
             if radius != nil || ear != nil { self.pet.tuneNotch(radius: radius, ear: ear) }
+            if control["renew_usage_token"] as? Bool == true { self.usageAPI.renewNow() }
         }
         server.stateProvider = { [unowned self] in
             var snapshot = self.tracker.snapshot()
