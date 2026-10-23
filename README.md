@@ -38,12 +38,12 @@ jusqu'à sa dernière position flottante. Le choix est mémorisé au relancement
 
 On peut aussi changer de mode à la main, sans le menu :
 
-- **Vers l'encoche** : attrape le pet et approche-le de l'encoche. Plus il s'en approche, plus il rétrécit, et le cadre
-  noir commence à sortir de l'encoche. Assez près, un retour haptique signale la zone de dépôt, le cadre gonfle et le
-  pet est aimanté vers sa place. Lâche-le : il glisse dans le cadre, s'écrase un instant (« plop ») et le cadre se
-  rétracte sur lui.
-- **Hors de l'encoche** : attrape le pet (ou le cadre) et tire-le. Il reste un peu collé avant de se détacher, reprend
-  sa taille normale en s'éloignant, et le cadre rentre dans l'encoche. Lâché hors de la zone, il atterrit là où tu le
+- **Vers l'encoche** : attrape le pet et approche-le de l'encoche. Il reste exactement sous ton curseur et prend peu à
+  peu la taille qu'il a dans l'encoche survolée, pendant que le cadre noir commence à sortir de l'encoche. Assez près,
+  un retour haptique signale la zone de dépôt, et le cadre s'ouvre comme au survol. Lâche-le : il glisse à sa place et
+  s'écrase un instant (« plop »). Le cadre se replie ensuite normalement quand la souris s'en va.
+- **Hors de l'encoche** : attrape le pet (ou le cadre survolé) et tire-le. Le cadre se rentre dans l'encoche à mesure
+  que tu t'éloignes, et le pet reprend sa taille normale. Lâché hors de la zone, il atterrit là où tu le
   poses, toujours entièrement à l'écran et sous la barre des menus.
 - Pendant le drag, le pet s'incline selon sa vitesse horizontale. Un simple clic lui fait faire un petit rebond.
 

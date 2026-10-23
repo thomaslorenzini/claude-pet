@@ -36,6 +36,9 @@ final class PetView: NSView {
     /// Vertical squash/stretch, applied around the sprite's feet. Width compensates.
     var squash: CGFloat = 1 { didSet { needsDisplay = true } }
     var rotation: CGFloat = 0 { didSet { needsDisplay = true } }
+    /// Point (view coordinates) that rotation and squash turn around; the feet when nil. While dragging
+    /// it is the point under the cursor, so the pet never slides away from the hand.
+    var pivot: CGPoint? { didSet { needsDisplay = true } }
     /// Black notch box, drawn behind the sprite.
     var boxPath: CGPath? { didSet { needsDisplay = true } }
     var contextMenuProvider: (() -> NSMenu)?
@@ -55,10 +58,11 @@ final class PetView: NSView {
         guard let image = canvas.makeImage(), spriteRect.width > 0 else { return }
         ctx.saveGState()
         ctx.interpolationQuality = .none
-        ctx.translateBy(x: spriteRect.midX, y: spriteRect.minY)
+        let p = pivot ?? CGPoint(x: spriteRect.midX, y: spriteRect.minY)
+        ctx.translateBy(x: p.x, y: p.y)
         ctx.rotate(by: rotation)
         ctx.scaleBy(x: 1 + (1 - squash) * 0.6, y: squash)
-        ctx.translateBy(x: -spriteRect.midX, y: -spriteRect.minY)
+        ctx.translateBy(x: -p.x, y: -p.y)
         ctx.draw(image, in: spriteRect)
         ctx.restoreGState()
     }
@@ -113,14 +117,15 @@ final class PetController: NSObject {
         var rect: CGRect
         var active = false
         var lastMouse: CGPoint
+        var inZone: Bool
         var velocity = CGPoint.zero
-        var inZone = false
     }
 
     private struct Drop {
         let toNotch: Bool
         let from: CGRect
         let to: CGRect
+        let grab: CGPoint
         /// Critically damped: no overshoot past the slot (it would poke above the screen), the bounce
         /// comes from the squash and the box instead.
         var progress = Spring(value: 0, target: 1, stiffness: 520, damping: 2 * sqrt(520))
@@ -159,9 +164,6 @@ final class PetController: NSObject {
     private var motionTimer: Timer?
     private var lastStep = CACurrentMediaTime()
     private var hovering = false
-    /// After a drop into the notch the cursor is still on the box: wait until it leaves before
-    /// reacting to hover, so the swallow animation is not cut short by the hover expansion.
-    private var hoverArmed = true
 
     override init() {
         let saved = UserDefaults.standard.integer(forKey: Self.scaleKey)
@@ -417,7 +419,7 @@ final class PetController: NSObject {
             rect = panel.frame
             grab = CGPoint(x: (mouse.x - rect.minX) / rect.width, y: (mouse.y - rect.minY) / rect.height)
         }
-        drag = Drag(start: mouse, grab: grab, rect: rect, lastMouse: mouse)
+        drag = Drag(start: mouse, grab: grab, rect: rect, lastMouse: mouse, inZone: mode == .notch)
     }
 
     private func mouseDragged() {
@@ -453,7 +455,8 @@ final class PetController: NSObject {
         }
         if d.inZone, notch != nil {
             open.target = 1
-            drop = Drop(toNotch: true, from: d.rect, to: d.rect)
+            expand.target = 1
+            drop = Drop(toNotch: true, from: d.rect, to: d.rect, grab: d.grab)
         } else {
             let mouse = NSEvent.mouseLocation
             let size = Self.size(for: scale)
@@ -469,7 +472,7 @@ final class PetController: NSObject {
             }
             open.target = 0
             expand.target = 0
-            drop = Drop(toNotch: false, from: d.rect, to: to)
+            drop = Drop(toNotch: false, from: d.rect, to: to, grab: d.grab)
         }
         mode = .dropping
         tilt.target = 0
@@ -486,16 +489,15 @@ final class PetController: NSObject {
         }
         d.lastMouse = mouse
 
-        // Proximity to the notch slot, measured where the held point would sit once docked.
+        // Proximity to the seat, measured where the held point would sit once docked. The seat is the
+        // hovered one: the drop zone looks exactly like the box under the cursor at rest.
         var proximity: CGFloat = 0
-        var slot: CGRect?
+        var seat: CGRect?
         if let geometry = notch, geometry.screen.frame.insetBy(dx: 0, dy: -1).contains(mouse) {
-            // The live seat: inside the zone the box swells, and the pet matches it so the drop
-            // never has to resize it.
-            let s = Self.regularRect(matching: geometry.layout(open: 1, expand: max(0, expand.value)).sprite)
+            let s = Self.regularRect(matching: geometry.layout(open: 1, expand: 1).sprite)
             let anchor = CGPoint(x: s.minX + d.grab.x * s.width, y: s.minY + d.grab.y * s.height)
             proximity = 1 - smoothstep(Self.dockRadius, Self.attractRadius, hypot(mouse.x - anchor.x, mouse.y - anchor.y))
-            slot = s
+            seat = s
         }
         // Hysteresis, so the zone does not flicker on its edge.
         let wasInZone = d.inZone
@@ -503,33 +505,30 @@ final class PetController: NSObject {
         if d.inZone && !wasInZone { HapticPulse.strong() }
 
         let floatScale = CGFloat(scale)
-        let slotScale = (slot?.width ?? 0) / CGFloat(PixelCanvas.standardWidth)
+        let seatScale = (seat?.width ?? 0) / CGFloat(PixelCanvas.standardWidth)
         let eased = 1 - pow(1 - proximity, 2)
-        size.target = slot == nil ? floatScale : lerp(floatScale, slotScale, eased)
+        size.target = seat == nil ? floatScale : lerp(floatScale, seatScale, eased)
+        // The held point stays exactly under the cursor, whatever the size.
         let w = CGFloat(PixelCanvas.standardWidth) * size.value
         let h = CGFloat(PixelCanvas.standardHeight) * size.value
         var rect = CGRect(x: mouse.x - d.grab.x * w, y: mouse.y - d.grab.y * h, width: w, height: h)
-        if let slot {
-            // Magnet: near the notch the pet is pulled towards its slot, ahead of the cursor.
-            let m = smoothstep(0.45, 1, proximity) * 0.8
-            rect.origin.x = lerp(rect.minX, slot.midX - w / 2, m)
-            rect.origin.y = lerp(rect.minY, slot.midY - h / 2, m)
-        }
-        // Never poke above the top of the screen (the pet is still shrinking as it reaches the notch).
+        // Only the body must stay on screen: the rows above it are empty while dragging.
         if let top = NSScreen.screens.first(where: { $0.frame.contains(mouse) })?.frame.maxY {
-            rect.origin.y = min(rect.minY, top - rect.height)
+            let emptyTop = CGFloat(SpriteComposer.compactOrigin.y) * size.value
+            rect.origin.y = min(rect.minY, top + emptyTop - rect.height)
         }
         d.rect = rect
         drag = d
 
-        // The box peeks out as the pet approaches and swells, ready to catch it, inside the zone.
-        open.target = slot == nil ? 0 : min(1, proximity * 1.7)
-        expand.target = d.inZone ? 0.35 : 0
+        // The box peeks out as the pet approaches, and opens fully, as on hover, inside the zone.
+        open.target = seat == nil ? 0 : (d.inZone ? 1 : min(1, proximity * 1.7))
+        expand.target = d.inZone ? 1 : 0
         tilt.target = min(0.4, max(-0.4, -d.velocity.x * 0.00045))
         squash.target = 1 + min(0.12, abs(d.velocity.y) * 0.00006)
 
         let origin = panel.frame.origin
         view.spriteRect = rect.offsetBy(dx: -origin.x, dy: -origin.y)
+        view.pivot = CGPoint(x: rect.minX + d.grab.x * w - origin.x, y: rect.minY + d.grab.y * h - origin.y)
         view.rotation = tilt.value
         view.squash = squash.value
         updateBoxDuringTransition(origin: origin)
@@ -552,6 +551,7 @@ final class PetController: NSObject {
         )
         let origin = panel.frame.origin
         view.spriteRect = rect.offsetBy(dx: -origin.x, dy: -origin.y)
+        view.pivot = CGPoint(x: rect.minX + dr.grab.x * rect.width - origin.x, y: rect.minY + dr.grab.y * rect.height - origin.y)
         view.rotation = tilt.value
         view.squash = squash.value
         updateBoxDuringTransition(origin: origin)
@@ -560,16 +560,16 @@ final class PetController: NSObject {
         drop = nil
         tilt.snap(to: 0)
         view.rotation = 0
+        view.pivot = nil
         squash.velocity = 0
         squash.target = 1
         if dr.toNotch, let geometry = notch {
             UserDefaults.standard.set(true, forKey: Self.notchKey)
-            // Plop: the pet squashes into its seat and the box swallows it with a bounce.
-            squash.value = 0.74
+            // Plop into the seat. The cursor is still on the box, so it stays in its hover state and
+            // collapses through the normal hover logic once the cursor leaves.
+            squash.value = 0.78
             open.target = 1
-            expand.target = 0
-            expand.velocity = -2.5
-            hoverArmed = false
+            hovering = true
             HapticPulse.strong()
             dock(in: geometry, settleBox: true)
         } else {
@@ -604,9 +604,7 @@ final class PetController: NSObject {
             let inBox = view.hitsBox(at: local)
             // Leave a little slack before collapsing, so the edge of the box does not flicker.
             let nearBox = view.boxPath?.boundingBoxOfPath.insetBy(dx: -6, dy: -6).contains(local) ?? false
-            if !hoverArmed {
-                if !nearBox { hoverArmed = true }
-            } else if !hovering && inBox {
+            if !hovering && inBox {
                 hovering = true
                 expand.target = 1
                 HapticPulse.strong()
