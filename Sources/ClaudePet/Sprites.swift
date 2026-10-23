@@ -146,6 +146,8 @@ enum SpriteComposer {
         case .sleeping:
             // Still on purpose, like the whole sleeping pet: nothing moves while Claude is unused.
             c.draw(.zed, at: iconX, iconY, Palette.blue)
+        case .waving:
+            break
         case .idle:
             break
         }
@@ -160,6 +162,7 @@ enum SpriteComposer {
         var leftArmUp = false, rightArmUp = false
         var walking = false
         var color = Palette.body
+        var wave = (x: 0, y: 0)
 
         switch state {
         case .idle:
@@ -188,6 +191,12 @@ enum SpriteComposer {
         case .sleeping:
             eyes = .closed
             dy = 1
+        case .waving:
+            eyes = .happy
+            rightArmUp = true
+            // The raised hand bobs up and down against the body, twice a second.
+            wave = t % 2 == 0 ? (0, -1) : (0, 0)
+            dy = t % 4 == 0 ? -1 : 0
         }
 
         // Leave room above the head for the bubble.
@@ -210,7 +219,7 @@ enum SpriteComposer {
         let leftY = leftArmUp ? 8 : 12
         let rightY = rightArmUp ? 8 : 12
         c.fill(2 + dx, leftY + dy, 3 + dx, leftY + 1 + dy, color)
-        c.fill(18 + dx, rightY + dy, 19 + dx, rightY + 1 + dy, color)
+        c.fill(18 + dx + wave.x, rightY + dy + wave.y, 19 + dx + wave.x, rightY + 1 + dy + wave.y, color)
 
         drawEyes(eyes, into: &c, dx: dx, dy: dy)
         guard showsBubble else { return c }
@@ -230,7 +239,7 @@ enum SpriteComposer {
             bubble(into: &c) { $0.draw(.heart, at: 17, 2, Palette.pink) }
         case .sleeping:
             c.draw(.zed, at: 18, 4, Palette.blue)
-        case .idle:
+        case .idle, .waving:
             break
         }
         return c

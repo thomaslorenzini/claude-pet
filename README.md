@@ -82,6 +82,8 @@ On peut aussi changer de mode à la main, sans le menu :
   que tu t'éloignes, et le pet reprend sa taille normale. Lâché hors de la zone, il atterrit là où tu le
   poses, toujours entièrement à l'écran et sous la barre des menus.
 - Pendant le drag, le pet s'incline selon sa vitesse horizontale. Un simple clic lui fait faire un petit rebond.
+  S'il dort, un clic le réveille : il te fait coucou pendant 2,5 s, puis se rendort 10 s plus tard s'il ne se passe
+  rien.
 
 Pour une vraie app (sans icône Dock, lançable depuis le Finder ou au login) :
 

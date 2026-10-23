@@ -217,6 +217,8 @@ final class PetController: NSObject {
     private var tilt = Spring(value: 0, target: 0, stiffness: 240, damping: 13)
     private var drag: Drag?
     private var drop: Drop?
+    /// A single click (no drag), floating or docked.
+    var onClick: (() -> Void)?
 
     /// Gauge colors, in `QuotaStore.Kind` order: 5 h, week, context.
     private static let gaugeColors = [
@@ -548,6 +550,7 @@ final class PetController: NSObject {
             squash.velocity = 0
             squash.target = 1
             startMotion()
+            onClick?()
             return
         }
         if d.inZone, notch != nil {

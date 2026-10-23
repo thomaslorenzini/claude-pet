@@ -12,6 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var serverStatus = "démarrage…"
     private var tickTimer: Timer?
     private var ticks = 0
+    /// Clicking the sleeping pet wakes it with a wave, until this date.
+    private var wavingUntil: Date?
+    private static let waveDuration: TimeInterval = 2.5
     private var termSource: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -24,6 +27,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         pet = PetController()
         pet.view.contextMenuProvider = { [unowned self] in self.buildMenu() }
+        pet.onClick = { [unowned self] in
+            guard self.tracker.display().state == .sleeping else { return }
+            // Woken up: say hello, then fall asleep again 10 s later if nothing happens.
+            self.tracker.poke()
+            self.wavingUntil = Date().addingTimeInterval(Self.waveDuration)
+            self.refresh()
+        }
         pet.show()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -102,7 +112,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refresh() {
-        let display = tracker.display()
+        var display = tracker.display()
+        if let until = wavingUntil, Date() < until, display.state == .idle || display.state == .sleeping {
+            display = (.waving, nil)
+        }
         pet.update(state: display.state, tool: display.tool)
         let leader = tracker.leader
         pet.updateGauges(quotas.gauges(

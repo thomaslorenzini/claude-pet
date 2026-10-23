@@ -3,6 +3,8 @@ import Foundation
 /// What the pet is currently showing.
 enum PetState: String, CaseIterable {
     case idle, thinking, working, error, waiting, happy, sleeping
+    /// Says hello after being clicked awake. Never produced by hooks.
+    case waving
 
     /// Used to pick which session wins when several run in parallel.
     var priority: Int {
@@ -12,6 +14,7 @@ enum PetState: String, CaseIterable {
         case .working: return 4
         case .thinking: return 3
         case .happy: return 2
+        case .waving: return 1
         case .idle: return 1
         case .sleeping: return 0
         }
@@ -25,6 +28,7 @@ enum PetState: String, CaseIterable {
         case .error: return "erreur"
         case .waiting: return "t'attend"
         case .happy: return "content"
+        case .waving: return "te fait coucou"
         case .sleeping: return "dort"
         }
     }
@@ -82,6 +86,11 @@ final class SessionTracker {
 
     private(set) var sessions: [String: SessionInfo] = [:]
     private(set) var lastActivity = Date()
+
+    /// Counts as activity without changing any session: a click restarts the sleep countdown.
+    func poke(now: Date = Date()) {
+        lastActivity = now
+    }
 
     func handle(_ event: [String: Any], now: Date = Date()) {
         let name = event["hook_event_name"] as? String ?? ""
