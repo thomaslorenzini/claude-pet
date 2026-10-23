@@ -117,6 +117,9 @@ enum Palette {
 /// Builds every frame procedurally. This is the single place to swap in real assets later.
 enum SpriteComposer {
     enum Eyes { case open, closed, up, happy, cross }
+    /// `up` sticks out diagonally (a cheer), `high` points straight up past the head (a raised hand);
+    /// both clearly leave the body's outline, which a block on its corner did not.
+    enum Arm { case down, up, high, reach }
 
     /// Compact frames used in the notch: the body cropped from a regular frame, with the status icon
     /// beside it instead of in a bubble above, so the pet can be twice as big in 32 pt.
@@ -172,10 +175,10 @@ enum SpriteComposer {
         var c = PixelCanvas()
         var dx = 0, dy = 0
         var eyes = Eyes.open
-        var leftArmUp = false, rightArmUp = false
+        var leftArm = Arm.down, rightArm = Arm.down
         var walking = false
         var color = Palette.body
-        var wave = (x: 0, y: 0)
+        var wave = 0
 
         switch state {
         case .idle:
@@ -186,29 +189,30 @@ enum SpriteComposer {
             dy = (t / 3) % 2
         case .working:
             walking = true
-            leftArmUp = t % 2 == 0
-            rightArmUp = !leftArmUp
+            leftArm = t % 2 == 0 ? .up : .down
+            rightArm = t % 2 == 0 ? .down : .up
             dy = t % 2 == 0 ? 0 : -1
         case .error:
             eyes = .cross
             dx = t % 2 == 0 ? -1 : 1
             color = t % 4 < 2 ? Palette.bodyError : Palette.body
         case .waiting:
-            rightArmUp = t % 2 == 0
+            // Hand raised on the left, clear of the bubble.
+            leftArm = t % 2 == 0 ? .high : .down
             dy = t % 4 == 0 ? -1 : 0
         case .happy:
             eyes = .happy
-            leftArmUp = true
-            rightArmUp = true
+            leftArm = .up
+            rightArm = .up
             dy = t % 2 == 0 ? -1 : 0
         case .sleeping:
             eyes = .closed
             dy = 1
         case .waving:
             eyes = .happy
-            rightArmUp = true
-            // The raised hand bobs up and down against the body, twice a second.
-            wave = t % 2 == 0 ? (0, -1) : (0, 0)
+            rightArm = .high
+            // The raised hand swings side to side, twice a second.
+            wave = t % 2 == 0 ? 1 : -1
             dy = t % 4 == 0 ? -1 : 0
         }
 
@@ -229,10 +233,8 @@ enum SpriteComposer {
         c.fill(4 + dx, 15 + dy, 17 + dx, 15 + dy, Palette.bodyShade)
 
         // Arms.
-        let leftY = leftArmUp ? 8 : 12
-        let rightY = rightArmUp ? 8 : 12
-        c.fill(2 + dx, leftY + dy, 3 + dx, leftY + 1 + dy, color)
-        c.fill(18 + dx + wave.x, rightY + dy + wave.y, 19 + dx + wave.x, rightY + 1 + dy + wave.y, color)
+        drawArm(leftArm, right: false, into: &c, dx: dx, dy: dy, color: color)
+        drawArm(rightArm, right: true, into: &c, dx: dx, dy: dy, color: color, wave: wave)
 
         drawEyes(eyes, into: &c, dx: dx, dy: dy)
         guard showsBubble else { return c }
@@ -300,13 +302,13 @@ enum SpriteComposer {
 
         switch f {
         case 0:
-            drawFrontPet(into: &c, eyesDX: -1, leftArm: 14)
+            drawFrontPet(into: &c, eyesDX: -1, leftArm: .down)
         case 1, 2:
-            drawFrontPet(into: &c, eyesDX: -1, leftArm: 16)
+            drawFrontPet(into: &c, eyesDX: -1, leftArm: .reach)
         case 3:
-            drawFrontPet(into: &c, eyes: .happy, leftArm: 10)
+            drawFrontPet(into: &c, eyes: .happy, leftArm: .up)
         case 4, 5:
-            drawFrontPet(into: &c, eyesDX: -1, leftArm: 14)
+            drawFrontPet(into: &c, eyesDX: -1, leftArm: .down)
         case 6:
             drawSidePet(into: &c, dy: -2, hand: nil)
         case 7:
@@ -338,14 +340,38 @@ enum SpriteComposer {
         if k % 4 < 2, typed < 4 { c.set(2 + typed, 17, Palette.ink) }
     }
 
-    /// The usual front pose, standing where every other state stands. `leftArm` is the arm's top row.
-    private static func drawFrontPet(into c: inout PixelCanvas, eyes: Eyes = .open, eyesDX: Int = 0, leftArm: Int) {
+    /// The usual front pose, standing where every other state stands.
+    private static func drawFrontPet(into c: inout PixelCanvas, eyes: Eyes = .open, eyesDX: Int = 0, leftArm: Arm) {
         for x in [5, 7, 14, 16] { c.fill(x, 18, x, 19, Palette.bodyShade) }
         c.fill(4, 10, 17, 17, Palette.body)
         c.fill(4, 17, 17, 17, Palette.bodyShade)
-        c.fill(2, leftArm, 3, leftArm + 1, Palette.body)
-        c.fill(18, 14, 19, 15, Palette.body)
+        drawArm(leftArm, right: false, into: &c, dx: 0, dy: 2, color: Palette.body)
+        drawArm(.down, right: true, into: &c, dx: 0, dy: 2, color: Palette.body)
         drawEyes(eyes, into: &c, dx: eyesDX, dy: 2)
+    }
+
+    /// One arm beside a front-facing body whose top row is `8 + dy`. Drawn for the left side, mirrored
+    /// for the right. `wave` shifts a raised hand sideways.
+    private static func drawArm(_ arm: Arm, right: Bool, into c: inout PixelCanvas, dx: Int, dy: Int, color: UInt32, wave: Int = 0) {
+        let top = 8 + dy
+        func part(_ x0: Int, _ x1: Int, _ y0: Int, _ y1: Int, shift: Int = 0) {
+            // The body spans x 4…17: x on the left maps to 21 - x on the right.
+            let a = right ? 21 - x1 + shift : x0 - shift, b = right ? 21 - x0 + shift : x1 - shift
+            c.fill(a + dx, top + y0, b + dx, top + y1, color)
+        }
+        switch arm {
+        case .down:
+            part(2, 3, 4, 5)
+        case .reach:
+            part(2, 3, 6, 7)
+        case .up:
+            part(2, 3, 2, 3)
+            part(1, 2, 0, 1)
+        case .high:
+            part(2, 3, 2, 3)
+            part(1, 2, 0, 1)
+            part(1, 2, -2, -1, shift: wave)
+        }
     }
 
     /// Facing the laptop: front face plus a shaded flank, eyes on the screen. `hand` is the near hand's
