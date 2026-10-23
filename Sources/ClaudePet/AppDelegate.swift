@@ -108,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.view.contextMenuProvider = { [unowned self] in self.buildMenu() }
         pet.onClick = { [unowned self] in self.wakeUp() }
         pet.onModeChange = { [unowned self] in self.tutorial?.petModeChanged($0) }
+        pet.onDemoAlertChange = { [unowned self] in self.refresh() }
         pet.show()
         requests.onChange = { [unowned self] in
             self.pet.showRequest(self.requests.current, waiting: max(0, self.requests.queue.count - 1))
@@ -221,6 +222,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Tests: the first-run tutorial, whether it was already seen or not.
             if let on = control["tutorial"] as? Bool { on ? self.startTutorial() : self.tutorial?.stop() }
             if control["tutorial_skip"] as? Bool == true { self.tutorial?.skip() }
+            // Tests: the explanation bubble's buttons.
+            if let button = control["tutorial_press"] as? String {
+                if button == "understood" { self.tutorial?.understood() }
+                if button == "confused" { self.tutorial?.confused() }
+            }
             if let path = control["tutorial_snapshot"] as? String { self.tutorial?.snapshot(to: path) }
         }
         server.stateProvider = { [unowned self] in
@@ -297,6 +303,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// whatever Claude is doing.
     private func shownDisplay() -> (state: PetState, tool: ToolKind?) {
         if let until = wavingUntil, Date() < until { return (.waving, nil) }
+        // The tutorial's "Claude needs you": the real alert sprite, without a request.
+        if pet.demoAlert { return (.waiting, nil) }
         return tracker.display()
     }
 

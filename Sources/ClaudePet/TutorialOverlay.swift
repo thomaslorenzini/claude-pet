@@ -8,7 +8,11 @@ import AppKit
 /// unchanged; only the caption (with "Passer") takes clicks, in its own small panel. One 60 Hz timer
 /// runs while the tutorial is on screen, nothing afterwards.
 final class TutorialOverlay: NSObject {
-    enum Step: String { case dragOut = "drag_out", dragIn = "drag_in", done }
+    /// 1/4 the pet in the notch and its "Claude needs you", 2/4 pull it out, 3/4 floating and its alert,
+    /// 4/4 put it back.
+    enum Step: String {
+        case notchIntro = "notch_intro", dragOut = "drag_out", floatingIntro = "floating_intro", dragIn = "drag_in", done
+    }
 
     static let doneKey = "tutorialDone"
 
@@ -49,6 +53,8 @@ final class TutorialOverlay: NSObject {
     private var captionStep: Step
     private var finishing = false
     private var doneAt: CFTimeInterval?
+    /// Explanation steps: when the demo's "Claude needs you" shows (a breath after the step starts).
+    private var alertFrom: CFTimeInterval
 
     /// The pet's panel is at statusBar + 1.
     static let aboveThePet = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 2)
@@ -61,11 +67,12 @@ final class TutorialOverlay: NSObject {
         guard let geometry = NotchGeometry.find(), pet.mode == .notch || pet.mode == .floating else { return nil }
         self.pet = pet
         screen = geometry.screen
-        step = pet.mode == .notch ? .dragOut : .dragIn
+        step = pet.mode == .notch ? .notchIntro : .floatingIntro
         captionStep = step
         window = NSPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         pointerWindow = NSPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         demoStart = CACurrentMediaTime() + 0.9
+        alertFrom = CACurrentMediaTime() + 1.0
         // Opens from the whole screen down to the pet, as the dim fades in.
         let wide = screen.frame.insetBy(dx: -200, dy: -200)
         edges = [wide.minX, wide.minY, wide.maxX, wide.maxY].map {
@@ -100,6 +107,7 @@ final class TutorialOverlay: NSObject {
         captionPanel.contentView = caption
         captionPanel.alphaValue = 0
         caption.onSkip = { [weak self] in self?.skip() }
+        caption.onUnderstood = { [weak self] in self?.understood() }
         caption.show(step)
     }
 
@@ -113,8 +121,12 @@ final class TutorialOverlay: NSObject {
         // Escape works while the app is active (it is, right after the onboarding window): a global
         // key monitor would need the Accessibility permission, and taking the keyboard would steal it.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53, let self, !self.finishing else { return event }
-            self.skip()
+            guard let self, !self.finishing else { return event }
+            switch event.keyCode {
+            case 53: self.skip()
+            case 36, 76: self.caption.pressUnderstood()
+            default: return event
+            }
             return nil
         }
         lastTick = CACurrentMediaTime()
@@ -133,12 +145,29 @@ final class TutorialOverlay: NSObject {
     func skip() {
         guard !finishing else { return }
         UserDefaults.standard.set(true, forKey: Self.doneKey)
+        pet.setDemoAlert(false)
         finishing = true
         demoAlpha.target = 0
         fade.stiffness = 120
         fade.damping = 2 * sqrt(120)
         fade.target = 0
     }
+
+    /// "J'ai compris" (or Return) on an explanation step: on to the gesture.
+    func understood() {
+        guard !finishing else { return }
+        let now = CACurrentMediaTime()
+        switch step {
+        case .notchIntro: step = .dragOut
+        case .floatingIntro: step = .dragIn
+        default: return
+        }
+        pet.setDemoAlert(false)
+        restartDemo(at: now + 0.7)
+    }
+
+    /// Tests: "Je n'ai pas compris".
+    func confused() { caption.pressConfused() }
 
     // MARK: Following the real pet
 
@@ -148,13 +177,16 @@ final class TutorialOverlay: NSObject {
         switch (step, mode) {
         case (_, .dragging), (_, .flying):
             demoAlpha.target = 0
-        case (.dragOut, .floating):
-            step = .dragIn
-            restartDemo(at: now + 1.1)
-        case (.dragIn, .notch):
+            pet.setDemoAlert(false)
+        case (.notchIntro, .floating), (.dragOut, .floating):
+            // Out of the notch: show what floating is for, once it has landed.
+            step = .floatingIntro
+            alertFrom = now + 0.6
+        case (.floatingIntro, .notch), (.dragIn, .notch):
             step = .done
             doneAt = now
             demoAlpha.target = 0
+            pet.setDemoAlert(false)
             UserDefaults.standard.set(true, forKey: Self.doneKey)
         case (.dragOut, .notch), (.dragIn, .floating):
             // Dropped back where it was: show the gesture again, after a short breath.
@@ -187,6 +219,11 @@ final class TutorialOverlay: NSObject {
             fade.damping = 2 * sqrt(70)
             fade.target = 0
         }
+
+        // The demo's "Claude needs you", on explanation steps while the pet rests where they expect it.
+        let alert = !finishing && now >= alertFrom
+            && ((step == .notchIntro && pet.mode == .notch) || (step == .floatingIntro && pet.mode == .floating))
+        if alert != pet.demoAlert { pet.setDemoAlert(alert) }
 
         let path = demoPath()
         let target = spotlightTarget(path)
@@ -223,6 +260,7 @@ final class TutorialOverlay: NSObject {
     }
 
     private func teardown() {
+        pet.setDemoAlert(false)
         timer?.invalidate()
         timer = nil
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
@@ -239,6 +277,8 @@ final class TutorialOverlay: NSObject {
 
     private func spotlightTarget(_ path: DemoPath?) -> CGRect {
         var rect = pet.visibleFrame
+        // The pill above the floating pet belongs with it.
+        if let card = pet.alertCardFrame { rect = rect.union(card) }
         // Around the whole gesture while it is shown, around the pet alone while the user moves it.
         if demoActive, let path {
             rect = rect.union(path.from).union(path.to)
@@ -304,7 +344,7 @@ final class TutorialOverlay: NSObject {
             let from = pet.spriteFrame
             let held = CGPoint(x: from.midX, y: from.minY + 0.36 * from.height)
             return DemoPath(from: from, to: to, approach: clamp(CGPoint(x: held.x + 170, y: held.y - 130), visible))
-        case .done:
+        case .notchIntro, .floatingIntro, .done:
             return nil
         }
     }
@@ -610,97 +650,270 @@ final class CaptionPanel: NSPanel {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
-/// A pill: step badge, the instruction in Claude's serif, and a discreet "Passer · esc".
+/// The tutorial's text. Gesture steps: a pill (step badge, the instruction in Claude's serif, a discreet
+/// "Passer · esc"). Explanation steps: a bubble with a title, a short text and "Je n'ai pas compris" /
+/// "J'ai compris"; the first one swaps the text for a longer, clearer one.
 final class CaptionView: NSView {
     var onSkip: (() -> Void)?
-    private var step = TutorialOverlay.Step.dragOut
-    private var skipHovered = false { didSet { needsDisplay = true } }
-    private var skipPressed = false { didSet { needsDisplay = true } }
-    private static let height: CGFloat = 40
+    var onUnderstood: (() -> Void)?
+    private var step = TutorialOverlay.Step.notchIntro
+    /// "Je n'ai pas compris" was pressed: the longer explanation shows.
+    private(set) var detailed = false
+    private enum Hit { case skip, understood, confused }
+    private var hovered: Hit? { didSet { if hovered != oldValue { needsDisplay = true } } }
+    private var pressed: Hit? { didSet { needsDisplay = true } }
+    private static let pillHeight: CGFloat = 40
+    private static let bubbleWidth: CGFloat = 380
+    private static let pad: CGFloat = 20
+    private static let buttonHeight: CGFloat = 30
 
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     func show(_ step: TutorialOverlay.Step) {
         self.step = step
-        skipHovered = false
+        detailed = false
+        hovered = nil
         setFrameSize(fittingSize)
         needsDisplay = true
     }
 
+    private var isBubble: Bool { step == .notchIntro || step == .floatingIntro }
+    private var skippable: Bool { step != .done }
+
+    private var badge: String? {
+        switch step {
+        case .notchIntro: return "1/4"
+        case .dragOut: return "2/4"
+        case .floatingIntro: return "3/4"
+        case .dragIn: return "4/4"
+        case .done: return nil
+        }
+    }
+
     private var title: String {
         switch step {
-        case .dragOut: return tr("Attrape le pet et sors-le de l'encoche", "Grab the pet and pull it out of the notch")
+        case .notchIntro: return tr("Claude Pet vit dans ton encoche", "Claude Pet lives in your notch")
+        case .dragOut: return tr("Attrape Claude Pet et sors-le de l'encoche", "Grab Claude Pet and pull it out of the notch")
+        case .floatingIntro: return tr("Flottant, il te suit partout", "Floating, it goes anywhere")
         case .dragIn: return tr("Maintenant, ramène-le dans l'encoche", "Now drag it back into the notch")
         case .done: return tr("C'est tout !", "That's it!")
         }
     }
 
-    private var badge: String? {
-        switch step {
-        case .dragOut: return "1/2"
-        case .dragIn: return "2/2"
-        case .done: return nil
+    private var body: String {
+        switch (step, detailed) {
+        case (.notchIntro, false):
+            return tr("Son apparence te montre ce que fait Claude. Et quand Claude a besoin de toi, il te le fait savoir, comme ici.",
+                      "Its look shows what Claude is doing. And when Claude needs you, it lets you know, like here.")
+        case (.notchIntro, true):
+            return tr("""
+                Le pet change selon ce que fait Claude : il réfléchit, tape sur son ordinateur pendant les commandes et se réjouit quand une tâche est finie.
+
+                Quand Claude attend ta réponse (une autorisation, une question), le bandeau « Claude a besoin de vous » sort sous l'encoche, comme maintenant. Passe la souris dessus : la demande s'ouvre, et tu réponds directement depuis le pet.
+                """, """
+                The pet changes with what Claude is doing: it thinks, types on its laptop while commands run, and cheers when a task is done.
+
+                When Claude waits for your answer (a permission, a question), the "Claude needs you" banner slides out under the notch, like now. Hover it: the request opens and you answer right from the pet.
+                """)
+        case (.floatingIntro, false):
+            return tr("Pose-le où tu veux sur l'écran. Quand Claude a besoin de toi, il te le fait savoir là aussi.",
+                      "Put it anywhere on screen. When Claude needs you, it lets you know there too.")
+        case (.floatingIntro, true):
+            return tr("""
+                Hors de l'encoche, le pet reste là où tu le poses : dans un coin, à côté de ta fenêtre, sur n'importe quel écran.
+
+                Quand Claude attend ta réponse, une pastille « Claude a besoin de vous » apparaît au-dessus de lui, comme maintenant. Passe la souris sur le pet : la demande s'ouvre, et tu y réponds sans quitter ce que tu fais.
+                """, """
+                Out of the notch, the pet stays wherever you drop it: in a corner, next to your window, on any screen.
+
+                When Claude waits for your answer, a "Claude needs you" pill appears above it, like now. Hover the pet: the request opens and you answer without leaving what you're doing.
+                """)
+        default:
+            return ""
         }
     }
 
-    private var skippable: Bool { step != .done }
+    // MARK: Pieces
 
-    private func parts(_ theme: PanelTheme) -> (badge: NSAttributedString?, title: NSAttributedString, skip: NSAttributedString, key: NSAttributedString) {
-        (
-            badge.map { $0.attributed(.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold), theme.accent) },
-            title.attributed(.serif(15), theme.text),
-            tr("Passer", "Skip").attributed(.systemFont(ofSize: 12, weight: .medium), skipHovered ? theme.text : theme.secondary),
-            "esc".attributed(.systemFont(ofSize: 10, weight: .medium), theme.tertiary)
-        )
+    private func badgeText(_ theme: PanelTheme) -> NSAttributedString? {
+        badge.map { $0.attributed(.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold), theme.accent) }
     }
 
-    /// x of each part, and the total width.
-    private func layout(_ theme: PanelTheme) -> (badge: CGFloat, title: CGFloat, divider: CGFloat, skip: CGFloat, key: CGFloat, width: CGFloat) {
-        let p = parts(theme)
+    private func skipText(_ theme: PanelTheme) -> (NSAttributedString, NSAttributedString) {
+        (tr("Passer", "Skip").attributed(.systemFont(ofSize: 12, weight: .medium), hovered == .skip ? theme.text : theme.secondary),
+         "esc".attributed(.systemFont(ofSize: 10, weight: .medium), theme.tertiary))
+    }
+
+    private func bodyText(_ theme: PanelTheme) -> NSAttributedString {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 2.5
+        return NSAttributedString(string: body, attributes: [
+            .font: NSFont.systemFont(ofSize: 13), .foregroundColor: theme.secondary, .paragraphStyle: style,
+        ])
+    }
+
+    private func titleText(_ theme: PanelTheme, size: CGFloat) -> NSAttributedString {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byWordWrapping
+        return NSAttributedString(string: title, attributes: [.font: NSFont.serif(size), .foregroundColor: theme.text, .paragraphStyle: style])
+    }
+
+    private func height(of text: NSAttributedString, width: CGFloat) -> CGFloat {
+        ceil(text.boundingRect(with: CGSize(width: width, height: 2000), options: .usesLineFragmentOrigin).height)
+    }
+
+    private func buttonWidth(_ text: NSAttributedString) -> CGFloat { ceil(text.size().width) + 30 }
+
+    // MARK: Layout
+
+    private struct Bubble {
+        var badge: CGRect?
+        var skip: CGRect
+        var title: CGRect
+        var body: CGRect
+        var understood: CGRect
+        var confused: CGRect?
+        var height: CGFloat
+    }
+
+    private func bubbleLayout(_ theme: PanelTheme) -> Bubble {
+        let pad = Self.pad, inner = Self.bubbleWidth - 2 * pad
+        var y = pad
+        var badgeRect: CGRect?
+        if let b = badgeText(theme) {
+            let s = b.size()
+            badgeRect = CGRect(x: pad, y: y, width: s.width + 14, height: s.height + 6)
+        }
+        let (skip, key) = skipText(theme)
+        let skipWidth = skip.size().width + 7 + key.size().width + 10 + 20
+        let skipRect = CGRect(x: Self.bubbleWidth - pad - skipWidth + 10, y: y - 4, width: skipWidth, height: 26)
+        y += (badgeRect?.height ?? 18) + 10
+        let t = titleText(theme, size: 19)
+        let titleRect = CGRect(x: pad, y: y, width: inner, height: height(of: t, width: inner))
+        y = titleRect.maxY + 6
+        let bodyRect = CGRect(x: pad, y: y, width: inner, height: height(of: bodyText(theme), width: inner))
+        y = bodyRect.maxY + 18
+        let understood = buttonWidth(tr("J'ai compris", "Got it").attributed(.systemFont(ofSize: 12.5, weight: .semibold), theme.text))
+        let understoodRect = CGRect(x: Self.bubbleWidth - pad - understood, y: y, width: understood, height: Self.buttonHeight)
+        var confusedRect: CGRect?
+        if !detailed {
+            let w = buttonWidth(tr("Je n'ai pas compris", "I don't get it").attributed(.systemFont(ofSize: 12.5, weight: .medium), theme.text))
+            confusedRect = CGRect(x: understoodRect.minX - 8 - w, y: y, width: w, height: Self.buttonHeight)
+        }
+        return Bubble(badge: badgeRect, skip: skipRect, title: titleRect, body: bodyRect, understood: understoodRect,
+                      confused: confusedRect, height: understoodRect.maxY + pad)
+    }
+
+    /// Pill: x of each part, and the total width.
+    private func pillLayout(_ theme: PanelTheme) -> (badge: CGFloat, title: CGFloat, divider: CGFloat, skip: CGFloat, key: CGFloat, width: CGFloat) {
         var x: CGFloat = 16
         let badgeX = x
-        if let b = p.badge { x += b.size().width + 14 + 10 }
+        if let b = badgeText(theme) { x += b.size().width + 14 + 10 }
         if step == .done { x += 22 }
         let titleX = x
-        x += p.title.size().width
+        x += titleText(theme, size: 15).size().width
         guard skippable else { return (badgeX, titleX, 0, 0, 0, x + 18) }
+        let (skip, key) = skipText(theme)
         x += 16
         let dividerX = x
         x += 1 + 14
         let skipX = x
-        x += p.skip.size().width + 7
+        x += skip.size().width + 7
         let keyX = x
-        x += p.key.size().width + 10 + 14
+        x += key.size().width + 10 + 14
         return (badgeX, titleX, dividerX, skipX, keyX, x)
     }
 
     override var fittingSize: NSSize {
-        NSSize(width: ceil(layout(PanelTheme.current(effectiveAppearance)).width), height: Self.height)
+        let theme = PanelTheme.current(effectiveAppearance)
+        if isBubble { return NSSize(width: Self.bubbleWidth, height: bubbleLayout(theme).height) }
+        return NSSize(width: ceil(pillLayout(theme).width), height: Self.pillHeight)
     }
 
-    private var skipRect: CGRect {
-        let l = layout(PanelTheme.current(effectiveAppearance))
-        return skippable ? CGRect(x: l.divider, y: 0, width: bounds.width - l.divider, height: bounds.height) : .zero
+    private func hit(at point: CGPoint) -> Hit? {
+        let theme = PanelTheme.current(effectiveAppearance)
+        if isBubble {
+            let b = bubbleLayout(theme)
+            if b.understood.contains(point) { return .understood }
+            if let c = b.confused, c.contains(point) { return .confused }
+            if b.skip.contains(point) { return .skip }
+            return nil
+        }
+        let l = pillLayout(theme)
+        return skippable && point.x >= l.divider ? .skip : nil
     }
+
+    // MARK: Drawing
 
     override func draw(_ dirtyRect: NSRect) {
         let theme = PanelTheme.current(effectiveAppearance)
-        let p = parts(theme), l = layout(theme)
-        let pill = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: Self.height / 2, yRadius: Self.height / 2)
+        let radius = isBubble ? 18 : Self.pillHeight / 2
+        let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         theme.background.setFill()
-        pill.fill()
+        shape.fill()
         theme.stroke.setStroke()
-        pill.lineWidth = 1
-        pill.stroke()
-        let mid = bounds.height / 2
+        shape.lineWidth = 1
+        shape.stroke()
+        isBubble ? drawBubble(theme) : drawPill(theme)
+    }
 
-        if let b = p.badge {
+    private func drawBadge(_ theme: PanelTheme, in capsule: CGRect) {
+        guard let b = badgeText(theme) else { return }
+        theme.accent.withAlphaComponent(0.14).setFill()
+        NSBezierPath(roundedRect: capsule, xRadius: capsule.height / 2, yRadius: capsule.height / 2).fill()
+        b.draw(at: CGPoint(x: capsule.minX + 7, y: capsule.minY + 3))
+    }
+
+    /// "Passer" and its esc key cap, from `x`, centered on `mid`.
+    private func drawSkip(_ theme: PanelTheme, x: CGFloat, mid: CGFloat) {
+        let (skip, key) = skipText(theme)
+        let skipSize = skip.size(), keySize = key.size()
+        skip.draw(at: CGPoint(x: x, y: mid - skipSize.height / 2))
+        let cap = CGRect(x: x + skipSize.width + 7, y: mid - keySize.height / 2 - 1.5, width: keySize.width + 10, height: keySize.height + 3)
+        let capPath = NSBezierPath(roundedRect: cap.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
+        theme.tertiary.withAlphaComponent(0.5).setStroke()
+        capPath.lineWidth = 1
+        capPath.stroke()
+        key.draw(at: CGPoint(x: cap.minX + 5, y: cap.minY + 1.5))
+    }
+
+    private func drawHoverPlate(_ theme: PanelTheme, _ rect: CGRect, _ hit: Hit) {
+        guard hovered == hit || pressed == hit else { return }
+        theme.text.withAlphaComponent(pressed == hit ? 0.09 : 0.05).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2).fill()
+    }
+
+    private func drawBubble(_ theme: PanelTheme) {
+        let b = bubbleLayout(theme)
+        if let badge = b.badge { drawBadge(theme, in: badge) }
+        drawHoverPlate(theme, b.skip, .skip)
+        drawSkip(theme, x: b.skip.minX + 10, mid: b.skip.midY)
+        titleText(theme, size: 19).draw(with: b.title, options: .usesLineFragmentOrigin)
+        bodyText(theme).draw(with: b.body, options: .usesLineFragmentOrigin)
+
+        if let confused = b.confused {
+            let lift: CGFloat = pressed == .confused ? 0.14 : hovered == .confused ? 0.11 : 0.07
+            theme.text.withAlphaComponent(lift).setFill()
+            NSBezierPath(roundedRect: confused, xRadius: confused.height / 2, yRadius: confused.height / 2).fill()
+            let text = tr("Je n'ai pas compris", "I don't get it").attributed(.systemFont(ofSize: 12.5, weight: .medium), theme.text)
+            let s = text.size()
+            text.draw(at: CGPoint(x: confused.midX - s.width / 2, y: confused.midY - s.height / 2))
+        }
+        let lift: CGFloat = pressed == .understood ? 0.08 : hovered == .understood ? 0.14 : 0
+        (theme.accent.blended(withFraction: lift, of: .white) ?? theme.accent).setFill()
+        NSBezierPath(roundedRect: b.understood, xRadius: b.understood.height / 2, yRadius: b.understood.height / 2).fill()
+        let text = tr("J'ai compris", "Got it").attributed(.systemFont(ofSize: 12.5, weight: .semibold), NSColor(white: 0.08, alpha: 1))
+        let s = text.size()
+        text.draw(at: CGPoint(x: b.understood.midX - s.width / 2, y: b.understood.midY - s.height / 2))
+    }
+
+    private func drawPill(_ theme: PanelTheme) {
+        let l = pillLayout(theme)
+        let mid = bounds.height / 2
+        if let b = badgeText(theme) {
             let size = b.size()
-            let capsule = CGRect(x: l.badge, y: mid - size.height / 2 - 3, width: size.width + 14, height: size.height + 6)
-            theme.accent.withAlphaComponent(0.14).setFill()
-            NSBezierPath(roundedRect: capsule, xRadius: capsule.height / 2, yRadius: capsule.height / 2).fill()
-            b.draw(at: CGPoint(x: capsule.minX + 7, y: capsule.minY + 3))
+            drawBadge(theme, in: CGRect(x: l.badge, y: mid - size.height / 2 - 3, width: size.width + 14, height: size.height + 6))
         }
         if step == .done {
             // A small accent disc with a tick, the same mark as the onboarding's success.
@@ -717,27 +930,17 @@ final class CaptionView: NSView {
             NSColor.white.setStroke()
             tick.stroke()
         }
-        let titleSize = p.title.size()
-        p.title.draw(at: CGPoint(x: l.title, y: mid - titleSize.height / 2))
+        let title = titleText(theme, size: 15)
+        title.draw(at: CGPoint(x: l.title, y: mid - title.size().height / 2))
 
         guard skippable else { return }
         theme.stroke.setFill()
         CGRect(x: l.divider, y: mid - 8, width: 1, height: 16).fill()
-        if skipHovered || skipPressed {
-            theme.text.withAlphaComponent(skipPressed ? 0.09 : 0.05).setFill()
-            let r = CGRect(x: l.divider + 6, y: 5, width: bounds.width - l.divider - 11, height: bounds.height - 10)
-            NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
-        }
-        let skipSize = p.skip.size()
-        p.skip.draw(at: CGPoint(x: l.skip, y: mid - skipSize.height / 2))
-        let keySize = p.key.size()
-        let cap = CGRect(x: l.key, y: mid - keySize.height / 2 - 1.5, width: keySize.width + 10, height: keySize.height + 3)
-        let capPath = NSBezierPath(roundedRect: cap.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
-        theme.tertiary.withAlphaComponent(0.5).setStroke()
-        capPath.lineWidth = 1
-        capPath.stroke()
-        p.key.draw(at: CGPoint(x: cap.minX + 5, y: cap.minY + 1.5))
+        drawHoverPlate(theme, CGRect(x: l.divider + 6, y: 5, width: bounds.width - l.divider - 11, height: bounds.height - 10), .skip)
+        drawSkip(theme, x: l.skip, mid: mid)
     }
+
+    // MARK: Mouse
 
     override func updateTrackingAreas() {
         trackingAreas.forEach(removeTrackingArea)
@@ -746,16 +949,33 @@ final class CaptionView: NSView {
 
     private func local(_ event: NSEvent) -> CGPoint { convert(event.locationInWindow, from: nil) }
 
-    override func mouseMoved(with event: NSEvent) { skipHovered = skipRect.contains(local(event)) }
-    override func mouseEntered(with event: NSEvent) { skipHovered = skipRect.contains(local(event)) }
-    override func mouseExited(with event: NSEvent) { skipHovered = false }
-    override func mouseDown(with event: NSEvent) { skipPressed = skipRect.contains(local(event)) }
+    override func mouseMoved(with event: NSEvent) { hovered = hit(at: local(event)) }
+    override func mouseEntered(with event: NSEvent) { hovered = hit(at: local(event)) }
+    override func mouseExited(with event: NSEvent) { hovered = nil }
+    override func mouseDown(with event: NSEvent) { pressed = hit(at: local(event)) }
     override func mouseUp(with event: NSEvent) {
-        let fire = skipPressed && skipRect.contains(local(event))
-        skipPressed = false
-        if fire { onSkip?() }
+        let target = hit(at: local(event))
+        let fire = pressed != nil && pressed == target ? target : nil
+        pressed = nil
+        guard let fire else { return }
+        perform(fire)
     }
 
-    /// Tests: as a click on "Passer".
-    func pressSkip() { if skippable { onSkip?() } }
+    private func perform(_ hit: Hit) {
+        switch hit {
+        case .skip: if skippable { onSkip?() }
+        case .understood: onUnderstood?()
+        case .confused:
+            detailed = true
+            hovered = nil
+            // The bubble grows downward from where it is: the overlay re-places it on the next frame.
+            setFrameSize(fittingSize)
+            needsDisplay = true
+        }
+    }
+
+    /// Tests and keys: the buttons by name.
+    func pressSkip() { perform(.skip) }
+    func pressUnderstood() { if isBubble { perform(.understood) } }
+    func pressConfused() { if isBubble, !detailed { perform(.confused) } }
 }

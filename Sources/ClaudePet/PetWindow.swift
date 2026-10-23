@@ -259,6 +259,14 @@ final class PetController: NSObject {
     /// The request the user has opened once: no more banner or pill for it, only the alert sprite.
     private var seenRequestID: Int?
     private var requestSeen: Bool { request != nil && request?.id == seenRequestID }
+    /// Tutorial: "Claude needs you" shown without any request (banner in the notch, pill when floating),
+    /// with nothing to open or answer. A real request takes over by itself.
+    private(set) var demoAlert = false
+    private var showsDemoAlert: Bool { demoAlert && request == nil }
+    /// The banner or pill is wanted: a request not opened yet, or the tutorial's demo.
+    private var attentionTarget: CGFloat { request == nil ? (showsDemoAlert ? 1 : 0) : (requestSeen ? 0 : 1) }
+    /// The app redraws the pet's state (the alert sprite) when the demo starts or stops.
+    var onDemoAlertChange: (() -> Void)?
     /// Floating: the cursor is over the pet's body, or over the card.
     private var petHovered = false
     private var overCard = false
@@ -380,10 +388,22 @@ final class PetController: NSObject {
             reveal.target = hovering ? 1 : 0
             if hovering, mode == .notch { seenRequestID = request?.id }
         }
-        attention.target = request == nil || requestSeen ? 0 : 1
+        attention.target = attentionTarget
         syncRequestUI()
         startMotion()
     }
+
+    func setDemoAlert(_ on: Bool) {
+        guard on != demoAlert else { return }
+        demoAlert = on
+        attention.target = attentionTarget
+        syncRequestUI()
+        startMotion()
+        onDemoAlertChange?()
+    }
+
+    /// The "Claude needs you" pill above the floating pet, when shown.
+    var alertCardFrame: CGRect? { card.frame }
 
     /// Opens the request as hovering would (tests drive it through `/control`).
     func revealRequest(_ on: Bool) {
@@ -392,7 +412,7 @@ final class PetController: NSObject {
             // Like a hover: seen on opening, the banner only goes away on closing.
             if on { seenRequestID = request?.id }
             reveal.target = on ? 1 : 0
-            if !on { attention.target = requestSeen ? 0 : 1 }
+            if !on { attention.target = attentionTarget }
             startMotion()
         } else {
             overCard = on
@@ -437,8 +457,13 @@ final class PetController: NSObject {
     /// Floating: the card opens while the cursor is on the pet or on the card. Before the first
     /// opening, a pill says Claude needs you; after it, only the pet's alert sprite does.
     private func updateFloatingCard() {
-        guard mode == .floating, request != nil, panel.isVisible else {
+        guard mode == .floating, request != nil || showsDemoAlert, panel.isVisible else {
             hideCard()
+            return
+        }
+        // The demo's pill only: there is nothing to open.
+        if request == nil {
+            card.show(requestView, near: panel.frame, expanded: false)
             return
         }
         if overCard || petHovered || typing {
@@ -1001,7 +1026,7 @@ final class PetController: NSObject {
             if panel.ignoresMouseEvents == hit { panel.ignoresMouseEvents = !hit }
             if hit != petHovered {
                 petHovered = hit
-                if request != nil { updateFloatingCard() }
+                if request != nil || showsDemoAlert { updateFloatingCard() }
             }
         case .notch:
             let inBox = view.hitsBox(at: local)
@@ -1018,7 +1043,8 @@ final class PetController: NSObject {
                 if request != nil {
                     reveal.target = 1
                     seenRequestID = request?.id
-                } else {
+                } else if !showsDemoAlert {
+                    // The demo keeps its banner: no gauges over it.
                     expand.target = 1
                 }
                 HapticPulse.strong()
@@ -1028,7 +1054,7 @@ final class PetController: NSObject {
                 expand.target = 0
                 reveal.target = 0
                 // Opened once: the banner does not come back, the alert sprite stays.
-                attention.target = request == nil || requestSeen ? 0 : 1
+                attention.target = attentionTarget
                 startMotion()
             }
             if panel.ignoresMouseEvents == inBox { panel.ignoresMouseEvents = !inBox }

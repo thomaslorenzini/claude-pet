@@ -505,6 +505,8 @@ final class RequestCard {
     }
 
     var isVisible: Bool { panel.isVisible }
+    /// On screen, nil when hidden (the tutorial lights it up with the pet).
+    var frame: CGRect? { panel.isVisible ? panel.frame : nil }
     /// While typing in "Autre" only.
     var allowsKey: Bool {
         get { panel.allowsKey }
