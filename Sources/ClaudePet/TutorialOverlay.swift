@@ -18,8 +18,13 @@ final class TutorialOverlay: NSObject {
 
     private unowned let pet: PetController
     private let screen: NSScreen
+    /// The dim, just below the pet's panel (statusBar + 1): the pet stays bright and takes its own clicks.
     private let window: NSPanel
     private let container = NSView()
+    /// Fake cursor and ghost, just above the pet's panel: a pointer always passes over everything,
+    /// including the pet and its black notch box.
+    private let pointerWindow: NSPanel
+    private let pointerContainer = NSView()
     private let dim = SpotlightView()
     private let ghost = GhostView()
     private let cursor = FakeCursorView()
@@ -45,6 +50,8 @@ final class TutorialOverlay: NSObject {
     private var finishing = false
     private var doneAt: CFTimeInterval?
 
+    /// The pet's panel is at statusBar + 1.
+    static let aboveThePet = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 2)
     private static let loop: CGFloat = 4.9
     private static let feather: CGFloat = 46
     private static let padding: CGFloat = 26
@@ -57,6 +64,7 @@ final class TutorialOverlay: NSObject {
         step = pet.mode == .notch ? .dragOut : .dragIn
         captionStep = step
         window = NSPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        pointerWindow = NSPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         demoStart = CACurrentMediaTime() + 0.9
         // Opens from the whole screen down to the pet, as the dim fades in.
         let wide = screen.frame.insetBy(dx: -200, dy: -200)
@@ -65,23 +73,27 @@ final class TutorialOverlay: NSObject {
         }
         super.init()
 
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.hasShadow = false
-        // Just below the pet's panel (statusBar + 1): the pet stays on top and takes its own clicks.
-        window.level = .statusBar
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        window.ignoresMouseEvents = true
-        window.hidesOnDeactivate = false
-        window.alphaValue = 0
-        container.frame = CGRect(origin: .zero, size: screen.frame.size)
-        container.wantsLayer = true
-        window.contentView = container
+        // Both click-through: the user's real drag goes to the pet.
+        for (panel, level) in [(window, NSWindow.Level.statusBar), (pointerWindow, Self.aboveThePet)] {
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = false
+            panel.level = level
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+            panel.ignoresMouseEvents = true
+            panel.hidesOnDeactivate = false
+            panel.alphaValue = 0
+        }
+        for (panel, view) in [(window, container), (pointerWindow, pointerContainer)] {
+            view.frame = CGRect(origin: .zero, size: screen.frame.size)
+            view.wantsLayer = true
+            panel.contentView = view
+        }
         dim.frame = container.bounds
         dim.autoresizingMask = [.width, .height]
         container.addSubview(dim)
-        container.addSubview(ghost)
-        container.addSubview(cursor)
+        pointerContainer.addSubview(ghost)
+        pointerContainer.addSubview(cursor)
         ghost.isHidden = true
         cursor.isHidden = true
 
@@ -94,6 +106,8 @@ final class TutorialOverlay: NSObject {
     func start() {
         window.setFrame(screen.frame, display: false)
         window.orderFrontRegardless()
+        pointerWindow.setFrame(screen.frame, display: false)
+        pointerWindow.orderFrontRegardless()
         layoutCaption(force: true)
         captionPanel.orderFrontRegardless()
         // Escape works while the app is active (it is, right after the onboarding window): a global
@@ -195,6 +209,7 @@ final class TutorialOverlay: NSObject {
         }
 
         window.alphaValue = fade.value
+        pointerWindow.alphaValue = fade.value
         let spot = CGRect(x: edges[0].value, y: edges[1].value,
                           width: edges[2].value - edges[0].value, height: edges[3].value - edges[1].value)
         dim.setHole(spot.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY), feather: Self.feather)
@@ -213,6 +228,7 @@ final class TutorialOverlay: NSObject {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
         window.orderOut(nil)
+        pointerWindow.orderOut(nil)
         captionPanel.orderOut(nil)
         let finish = onFinish
         onFinish = nil
@@ -395,6 +411,14 @@ final class TutorialOverlay: NSObject {
     func snapshot(to path: String) {
         guard let rep = container.bitmapImageRepForCachingDisplay(in: container.bounds) else { return }
         container.cacheDisplay(in: container.bounds, to: rep)
+        if let pointerRep = pointerContainer.bitmapImageRepForCachingDisplay(in: pointerContainer.bounds),
+           let context = NSGraphicsContext(bitmapImageRep: rep) {
+            pointerContainer.cacheDisplay(in: pointerContainer.bounds, to: pointerRep)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            pointerRep.draw(in: pointerContainer.bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            NSGraphicsContext.restoreGraphicsState()
+        }
         if let captionRep = caption.bitmapImageRepForCachingDisplay(in: caption.bounds),
            let context = NSGraphicsContext(bitmapImageRep: rep) {
             caption.cacheDisplay(in: caption.bounds, to: captionRep)
@@ -575,7 +599,8 @@ final class CaptionPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
-        level = .statusBar
+        // Over the pet and its notch box too, like the cursor.
+        level = TutorialOverlay.aboveThePet
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         hidesOnDeactivate = false
     }
