@@ -41,9 +41,9 @@ jusqu'à sa dernière position flottante. Le choix est mémorisé au relancement
 
 ### Jauges d'usage
 
-Dans l'encoche, trois anneaux entourent le pet : **bleu** en bas à gauche pour le quota 5 h, **violet** en bas à droite
-pour le quota de la semaine, **vert** en haut à droite pour la fenêtre de contexte de la session suivie. Au survol, ils
-grandissent avec le cadre et affichent leur pourcentage. Passer sur un anneau affiche le détail (« Quota 5 h : 50 % ·
+Quand tu survoles l'encoche, trois anneaux apparaissent autour du pet pendant que le cadre s'agrandit : **bleu** en bas
+à gauche pour le quota 5 h, **violet** en bas à droite pour le quota de la semaine, **vert** en haut à droite pour la
+fenêtre de contexte de la session suivie. Chacun affiche son pourcentage. Replié, le cadre ne montre que le pet. Passer sur un anneau affiche le détail (« Quota 5 h : 50 % ·
 reset dans 2 h 04 »).
 
 Aucune source officielle ne stocke ces chiffres. Le pet les lit en lecture seule, et la donnée la plus récente gagne :

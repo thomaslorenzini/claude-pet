@@ -49,6 +49,7 @@ final class PetView: NSView {
         var color: NSColor
         var lineWidth: CGFloat
         var showsNumber: Bool
+        var alpha: CGFloat
     }
     var gauges: [Gauge] = [] { didSet { needsDisplay = true } }
     /// Detail label under the box, centered on `anchor` (its top).
@@ -82,8 +83,10 @@ final class PetView: NSView {
     }
 
     private func draw(_ g: Gauge, in ctx: CGContext) {
+        guard g.alpha > 0.01, g.rect.width > 2 else { return }
         let r = g.rect.insetBy(dx: g.lineWidth / 2, dy: g.lineWidth / 2)
         ctx.saveGState()
+        ctx.setAlpha(g.alpha)
         ctx.setLineWidth(g.lineWidth)
         ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.16).cgColor)
         ctx.strokeEllipse(in: r)
@@ -101,7 +104,7 @@ final class PetView: NSView {
         guard g.showsNumber, let v = g.value else { return }
         let text = NSAttributedString(string: "\(Int((v * 100).rounded()))", attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: r.width * 0.42, weight: .semibold),
-            .foregroundColor: NSColor.white,
+            .foregroundColor: NSColor.white.withAlphaComponent(g.alpha),
         ])
         let size = text.size()
         text.draw(at: CGPoint(x: g.rect.midX - size.width / 2, y: g.rect.midY - size.height / 2))
@@ -344,7 +347,8 @@ final class PetController: NSObject {
         view.gauges = l.gauges.enumerated().map { i, rect in
             PetView.Gauge(
                 rect: rect.offsetBy(dx: -origin.x, dy: -origin.y), value: gaugeValues[i],
-                color: Self.gaugeColors[i], lineWidth: l.gaugeLineWidth, showsNumber: l.expand > 0.7
+                color: Self.gaugeColors[i], lineWidth: l.gaugeLineWidth, showsNumber: l.expand > 0.7,
+                alpha: l.gaugeAlpha
             )
         }
     }
@@ -715,7 +719,7 @@ final class PetController: NSObject {
     /// Detail label for the gauge under the cursor, refreshed at the mouse polling rate so the
     /// countdowns stay live.
     private func updateTooltip(at local: CGPoint) {
-        let index = hovering ? view.gauges.firstIndex { $0.rect.insetBy(dx: -3, dy: -3).contains(local) } : nil
+        let index = hovering ? view.gauges.firstIndex { $0.alpha > 0.5 && $0.rect.insetBy(dx: -3, dy: -3).contains(local) } : nil
         if index != hoveredGauge {
             hoveredGauge = index
             if index != nil { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }

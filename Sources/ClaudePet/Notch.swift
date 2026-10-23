@@ -84,6 +84,8 @@ struct NotchGeometry {
         var gaugeLineWidth: CGFloat
         /// Hover progress, used to show the numbers inside the gauges once they are big enough.
         var expand: CGFloat
+        /// Gauges fade in late in the hover expansion, once they have room.
+        var gaugeAlpha: CGFloat
     }
 
     // Apple does not expose the notch's shape: these defaults are eyeballed on a 14" MacBook Pro and
@@ -106,10 +108,12 @@ struct NotchGeometry {
         let e = max(-0.2, expand)
         let scale = max(collapsedScale * 0.8, lerp(collapsedScale, Self.expandedScale, e))
         let spriteSize = CGSize(width: CGFloat(SpriteComposer.compactWidth) * scale, height: CGFloat(SpriteComposer.compactHeight) * scale)
-        let pad = lerp(5, 12, e)
-        let gap = lerp(2, 8, e)
-        let ring = lerp(9, 20, max(0, e))
-        let inset = lerp(4, 9, max(0, e))
+        let pad = lerp(6, 12, e)
+        // Gauges only exist on hover: collapsed, they take no room and the box is the pet alone.
+        let shown = min(1, max(0, e))
+        let gap = 8 * shown
+        let ring = 20 * shown
+        let inset = 9 * shown
         let boxHeight = max(height, lerp(height, spriteSize.height + 16, e))
         let r = Self.bottomRadius, ear = Self.earRadius
         let fullWidth = pad + ring + gap + spriteSize.width + gap + ring + pad
@@ -135,7 +139,8 @@ struct NotchGeometry {
         ]
         return Layout(
             box: box, sprite: sprite, bottomRadius: min(r, boxHeight / 2, fullWidth / 2), fillet: ear,
-            gauges: gauges, gaugeLineWidth: lerp(1.75, 3, max(0, e)), expand: e
+            gauges: gauges, gaugeLineWidth: 3 * shown, expand: e,
+            gaugeAlpha: smoothstep(0.35, 0.9, e)
         )
     }
 
