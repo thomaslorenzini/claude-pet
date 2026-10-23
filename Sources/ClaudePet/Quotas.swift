@@ -4,6 +4,8 @@ import Foundation
 ///
 /// Nothing official stores these numbers, so several read-only sources feed the store and the
 /// most recent reading wins:
+/// - Anthropic's OAuth usage endpoint (`OAuthUsageSource`), like other usage monitors: fresh quotas
+///   everywhere, polled every 5 minutes;
 /// - the Claude Code status line JSON (`POST /status`, CLI sessions only): quotas and exact context;
 /// - Claude Desktop's `plan-usage-history.json` (quotas, written by Desktop at most every 270 s,
 ///   when it writes at all);
@@ -11,12 +13,13 @@ import Foundation
 /// A reading too old for its window is shown as unknown, never as 0 %.
 final class QuotaStore {
     enum Source: String, Codable {
-        case statusLine, desktopHistory
+        case statusLine, desktopHistory, oauthAPI
 
         var label: String {
             switch self {
             case .statusLine: return "ligne de statut"
             case .desktopHistory: return "Claude Desktop"
+            case .oauthAPI: return "API Anthropic"
             }
         }
     }
@@ -125,7 +128,7 @@ final class QuotaStore {
         contexts[id] = nil
     }
 
-    private func offer(five: Window?, week: Window?) {
+    func offer(five: Window?, week: Window?) {
         if let five, five.updated >= (fiveHour?.updated ?? .distantPast) { fiveHour = five }
         if let week, week.updated >= (self.week?.updated ?? .distantPast) { self.week = week }
         save()

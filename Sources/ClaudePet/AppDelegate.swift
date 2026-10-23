@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private let tracker = SessionTracker()
     private let quotas = QuotaStore()
+    private let usageAPI = OAuthUsageSource()
     private var pet: PetController!
     private var server: EventServer!
     private var statusItem: NSStatusItem!
@@ -53,6 +54,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             self.refresh()
         }
+        usageAPI.onUpdate = { [unowned self] five, week in
+            self.quotas.offer(five: five, week: week)
+            self.refresh()
+        }
+        usageAPI.start()
+
         server.onStatus = { [unowned self] status in
             self.quotas.handleStatus(status)
             self.refresh()
@@ -67,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             var snapshot = self.tracker.snapshot()
             snapshot["port"] = self.server.port.map { Int($0) } ?? NSNull()
             snapshot["quotas"] = self.quotas.snapshot()
+            snapshot["usage_api"] = self.usageAPI.status
             snapshot["notch"] = self.pet.mode != .floating
             snapshot["notch_radius"] = Double(NotchGeometry.bottomRadius)
             snapshot["notch_ear"] = Double(NotchGeometry.earRadius)
@@ -121,6 +129,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let count = tracker.sessions.count
         menu.addItem(disabled: count == 1 ? "1 session suivie" : "\(count) sessions suivies")
         menu.addItem(disabled: "Serveur : \(serverStatus)")
+        var quotaStatus = "Quotas (API) : \(usageAPI.status)"
+        if let last = usageAPI.lastSuccess, usageAPI.status != "à jour" {
+            quotaStatus += ", dernier succès il y a \(QuotaStore.duration(last, Date()))"
+        }
+        menu.addItem(disabled: quotaStatus)
         menu.addItem(.separator())
 
         menu.addItem(action: pet.isVisible ? "Masquer" : "Afficher", key: "h") { [unowned self] in
@@ -133,6 +146,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         notchItem.state = pet.wantsNotch ? .on : .off
         notchItem.isEnabled = notchAvailable && !pet.isTransitioning
+
+        let apiItem = menu.addItem(action: "Lire les quotas avec le compte Claude Code") { [unowned self] in
+            OAuthUsageSource.isEnabled.toggle()
+            OAuthUsageSource.isEnabled ? self.usageAPI.start() : self.usageAPI.stop()
+        }
+        apiItem.state = OAuthUsageSource.isEnabled ? .on : .off
 
         let docked = pet.mode != .floating
         let position = NSMenu()

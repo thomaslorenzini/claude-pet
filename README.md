@@ -50,13 +50,21 @@ Aucune source officielle ne stocke ces chiffres. Le pet les lit en lecture seule
 
 | Source | Donne | Quand |
 |---|---|---|
+| API d'usage d'Anthropic (`api.anthropic.com/api/oauth/usage`), comme ccusage ou claude-hud | quotas 5 h et semaine, frais | partout, toutes les 5 min, si Claude Code est connecté (Pro/Max) |
 | Ligne de statut de Claude Code (relais `statusline.sh`) | quotas 5 h et semaine, contexte exact | sessions `claude` dans un terminal (Desktop ne l'exécute pas) ; quotas pour Pro/Max, après la première réponse |
 | `~/Library/Application Support/Claude/plan-usage-history.json` | quotas | quand Claude Desktop l'écrit (au plus toutes les 270 s ; parfois plus du tout) |
 | Transcript de la session (chemin reçu avec chaque hook) | contexte estimé (« ≈ », taille de fenêtre supposée : 200k, ou 1M au-delà) | toutes les sessions, Desktop compris |
 
 Une donnée trop vieille pour sa fenêtre, ou dont la fenêtre a été réinitialisée, est affichée comme inconnue (anneau
-vide), jamais comme 0 %. L'endpoint `/usage` de claude.ai donnerait des quotas frais dans Desktop, mais il exige le
-cookie de session du compte : il n'est volontairement pas utilisé.
+vide), jamais comme 0 %.
+
+**L'API d'usage et ton Trousseau.** Pour l'API, l'app lit le jeton de connexion que Claude Code range dans le
+Trousseau (« Claude Code-credentials »). macOS demande ton accord au premier accès. L'app étant signée localement, il le
+redemandera sans doute après chaque recompilation. Le jeton reste en mémoire : il n'est jamais écrit, ni journalisé, ni
+renouvelé par l'app (s'il expire, elle attend que Claude Code le renouvelle). La requête est un GET vers cette seule
+adresse, sans redirection ni cookie, avec des pauses plus longues en cas d'erreur. Pour couper cette source : menu de la
+patte → **Lire les quotas avec le compte Claude Code**. L'état de la source s'affiche dans ce même menu.
+Le cookie de session claude.ai (endpoint `/usage` de Desktop) n'est, lui, jamais utilisé.
 
 `install-hooks.py` remplace la commande de ta ligne de statut par le relais, qui transmet le JSON au pet puis lance ta
 commande d'origine (sauvegardée dans `~/Library/Application Support/claude-pet/statusline-original`) : l'affichage du
