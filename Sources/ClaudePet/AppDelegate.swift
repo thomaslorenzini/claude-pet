@@ -35,7 +35,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let port = ProcessInfo.processInfo.environment["CLAUDE_PET_PORT"].flatMap(UInt16.init) ?? Self.defaultPort
         server = EventServer(preferredPort: port)
-        server.onReady = { port in Endpoint.publish(port: port) }
+        // CLAUDE_PET_NO_PUBLISH=1 runs a dev instance (with another CLAUDE_PET_PORT) that hooks never reach.
+        let publishes = ProcessInfo.processInfo.environment["CLAUDE_PET_NO_PUBLISH"] == nil
+        server.onReady = { port in if publishes { Endpoint.publish(port: port) } }
         server.onDuplicate = { port in
             NSLog("claude-pet: une autre instance tourne déjà sur le port %d, on quitte", Int(port))
             NSApp.terminate(nil)

@@ -76,7 +76,9 @@ final class SessionTracker {
     static let busyTimeout: TimeInterval = 10 * 60
     /// Sessions with no event for this long are forgotten (SessionEnd does not always fire).
     static let forgetAfter: TimeInterval = 3 * 60 * 60
-    static let sleepAfter: TimeInterval = 5 * 60
+    /// Idle with no hook for this long: the pet falls asleep, as a still frame. Busy and waiting
+    /// sessions never sleep: a long tool call or a long answer can go well over this without a hook.
+    static let sleepAfter: TimeInterval = 10
 
     private(set) var sessions: [String: SessionInfo] = [:]
     private(set) var lastActivity = Date()

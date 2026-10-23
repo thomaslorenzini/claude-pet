@@ -255,8 +255,10 @@ final class PetController: NSObject {
             name: NSApplication.didChangeScreenParametersNotification, object: nil
         )
         timers.append(Timer.scheduledTimer(withTimeInterval: 1 / Self.fps, repeats: true) { [weak self] _ in
-            self?.t += 1
-            self?.render()
+            // Asleep the frame never changes: skip rendering entirely, the cheapest possible idle.
+            guard let self, self.state != .sleeping else { return }
+            self.t += 1
+            self.render()
         })
         // Polling is cheap and needs no Accessibility permission, unlike a global event monitor.
         timers.append(Timer.scheduledTimer(withTimeInterval: 1 / 30, repeats: true) { [weak self] _ in

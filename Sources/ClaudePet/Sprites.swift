@@ -144,7 +144,8 @@ enum SpriteComposer {
         case .happy:
             c.draw(.heart, at: iconX, iconY, Palette.pink)
         case .sleeping:
-            c.draw(.zed, at: iconX, iconY - (t / 3) % 2, Palette.blue)
+            // Still on purpose, like the whole sleeping pet: nothing moves while Claude is unused.
+            c.draw(.zed, at: iconX, iconY, Palette.blue)
         case .idle:
             break
         }
@@ -228,8 +229,7 @@ enum SpriteComposer {
         case .happy:
             bubble(into: &c) { $0.draw(.heart, at: 17, 2, Palette.pink) }
         case .sleeping:
-            let phase = (t / 3) % 3
-            c.draw(.zed, at: 17 + phase, 6 - phase * 2, Palette.blue)
+            c.draw(.zed, at: 18, 4, Palette.blue)
         case .idle:
             break
         }

@@ -140,7 +140,7 @@ quasi nul si l'app est fermée (connexion refusée), 1 s au pire si l'app est bl
 | `PermissionRequest`, `Notification` (sauf `idle_prompt`) | t'attend (« ! » jaune) |
 | `Stop` | content (cœur) pendant 5 s, puis au repos |
 | `SessionEnd` | la session est oubliée |
-| aucune activité depuis 5 min | dort |
+| au repos et aucun hook depuis 10 s | dort, image figée (aucune animation, quasiment aucun CPU) |
 
 Garde-fous : un état « travaille » ou « réfléchit » sans événement depuis 10 min repasse au repos (un Échap
 n'envoie pas de `Stop`), et une session muette depuis 3 h est oubliée.
