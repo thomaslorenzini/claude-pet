@@ -56,7 +56,11 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
 
     private func schedule(after delay: TimeInterval) {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in self?.fetch() }
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in self?.fetch() }
+        // A few seconds either way does not matter for a 5-minute poll.
+        timer.tolerance = min(10, delay * 0.1)
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     private func fail(_ message: String, retryIn delay: TimeInterval? = nil) {

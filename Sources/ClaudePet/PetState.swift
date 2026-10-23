@@ -190,6 +190,18 @@ final class SessionTracker {
         return changed
     }
 
+    /// When `tick` or `display` will next change on their own (a transient state ending, a busy
+    /// session timing out, falling asleep…), so the app can sleep until then instead of polling.
+    func nextDeadline(now: Date = Date()) -> Date? {
+        var dates = [lastActivity.addingTimeInterval(Self.sleepAfter)]
+        for s in sessions.values {
+            if let until = s.transientUntil { dates.append(until) }
+            if s.state == .working || s.state == .thinking { dates.append(s.lastEvent.addingTimeInterval(Self.busyTimeout)) }
+            dates.append(s.lastEvent.addingTimeInterval(Self.forgetAfter))
+        }
+        return dates.filter { $0 > now }.min()
+    }
+
     /// The session currently driving the display, if any.
     var leader: SessionInfo? {
         sessions.values.max { a, b in

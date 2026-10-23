@@ -10,8 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var server: EventServer!
     private var statusItem: NSStatusItem!
     private var serverStatus = "démarrage…"
-    private var tickTimer: Timer?
-    private var ticks = 0
+    /// One-shot timer to the next moment something changes on its own (see `scheduleWake`).
+    private var wakeTimer: Timer?
+    private var lastHistoryCheck = Date.distantPast
     /// Clicking the sleeping pet wakes it with a wave, until this date.
     private var wavingUntil: Date?
     private static let waveDuration: TimeInterval = 2.5
@@ -88,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             snapshot["quotas"] = self.quotas.snapshot()
             snapshot["usage_api"] = self.usageAPI.status
             snapshot["notch"] = self.pet.mode != .floating
+            snapshot["click_through"] = self.pet.panel.ignoresMouseEvents
             snapshot["notch_radius"] = Double(NotchGeometry.bottomRadius)
             snapshot["notch_ear"] = Double(NotchGeometry.earRadius)
             return snapshot
@@ -98,13 +100,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         server.start()
 
-        tickTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [unowned self] _ in
-            self.ticks += 1
-            // Claude Desktop rewrites its usage history at most every 270 s: a stat every 30 s is plenty.
-            if self.ticks % 120 == 0 { self.quotas.reloadDesktopHistory() }
-            self.tracker.tick()
-            self.refresh()
+        wake()
+    }
+
+    /// Runs whatever changes on its own (transient states, sleep, timeouts, minute countdowns), then
+    /// schedules itself for the next such moment. Hooks and clicks refresh directly.
+    private func wake() {
+        let now = Date()
+        // Claude Desktop rewrites its usage history at most every 270 s: a stat every 30 s is plenty.
+        if now.timeIntervalSince(lastHistoryCheck) >= 30 {
+            lastHistoryCheck = now
+            quotas.reloadDesktopHistory()
         }
+        tracker.tick(now: now)
+        refresh()
+    }
+
+    private func scheduleWake() {
+        let now = Date()
+        // At least once a minute, for the countdowns and data ages in the gauge tooltips.
+        var next = now.addingTimeInterval(60)
+        if let deadline = tracker.nextDeadline(now: now), deadline < next { next = deadline }
+        if let until = wavingUntil, until > now, until < next { next = until }
+        // Deadlines are strict comparisons: land just after them.
+        let delay = max(0.05, next.timeIntervalSince(now) + 0.05)
+        wakeTimer?.invalidate()
+        let timer = Timer(timeInterval: delay, repeats: false) { [unowned self] _ in self.wake() }
+        timer.tolerance = min(1, delay * 0.1)
+        RunLoop.main.add(timer, forMode: .common)
+        wakeTimer = timer
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -122,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             leader: leader?.id,
             leaderFolder: leader?.cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
         ))
+        scheduleWake()
     }
 
     // MARK: Menu

@@ -204,7 +204,11 @@ final class PetController: NSObject {
     private(set) var tool: ToolKind?
     private(set) var mode = Mode.floating
     private var t = 0
-    private var timers: [Timer] = []
+    private var animationTimer: Timer?
+    private var mouseMonitors: [Any] = []
+    private var mousePoll: Timer?
+    private var lastMousePosition = NSPoint.zero
+    private var stillPolls = 0
 
     private var notch: NotchGeometry?
     private var flight: Flight?
@@ -256,17 +260,9 @@ final class PetController: NSObject {
             self, selector: #selector(screensChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil
         )
-        timers.append(Timer.scheduledTimer(withTimeInterval: 1 / Self.fps, repeats: true) { [weak self] _ in
-            // Asleep the frame never changes: skip rendering entirely, the cheapest possible idle.
-            guard let self, self.state != .sleeping else { return }
-            self.t += 1
-            self.render()
-        })
-        // Polling is cheap and needs no Accessibility permission, unlike a global event monitor.
-        timers.append(Timer.scheduledTimer(withTimeInterval: 1 / 30, repeats: true) { [weak self] _ in
-            self?.trackMouse()
-        })
-        timers.forEach { RunLoop.main.add($0, forMode: .common) }
+        syncAnimation()
+        panel.acceptsMouseMovedEvents = true
+        listenForMouse()
 
         if UserDefaults.standard.bool(forKey: Self.notchKey), let geometry = NotchGeometry.find() {
             dock(in: geometry)
@@ -283,6 +279,25 @@ final class PetController: NSObject {
         self.tool = tool
         t = 0
         render()
+        syncAnimation()
+    }
+
+    /// The 4 fps animation runs only while awake: asleep the frame never changes, so nothing ticks.
+    private func syncAnimation() {
+        if state == .sleeping {
+            animationTimer?.invalidate()
+            animationTimer = nil
+        } else if animationTimer == nil {
+            let timer = Timer(timeInterval: 1 / Self.fps, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                self.t += 1
+                self.render()
+            }
+            // Lets macOS batch this wakeup with others; 50 ms of jitter is invisible at 4 fps.
+            timer.tolerance = 0.05
+            RunLoop.main.add(timer, forMode: .common)
+            animationTimer = timer
+        }
     }
 
     func setScale(_ newScale: Int) {
@@ -292,6 +307,7 @@ final class PetController: NSObject {
         // Keep the feet where they were.
         panel.setFrame(NSRect(origin: panel.frame.origin, size: Self.size(for: newScale)), display: true)
         layoutFloating()
+        trackMouse()
     }
 
     enum Corner { case bottomRight, bottomLeft, topRight, topLeft }
@@ -302,6 +318,7 @@ final class PetController: NSObject {
         let x = (corner == .bottomLeft || corner == .topLeft) ? screen.minX + margin : screen.maxX - size.width - margin
         let y = (corner == .bottomLeft || corner == .bottomRight) ? screen.minY + margin : screen.maxY - size.height - margin
         panel.setFrameOrigin(NSPoint(x: x, y: y))
+        trackMouse()
     }
 
     // MARK: Notch
@@ -365,6 +382,7 @@ final class PetController: NSObject {
         panel.setFrame(geometry.panelFrame, display: true)
         render()
         layoutNotch()
+        trackMouse()
     }
 
     private func undockImmediately() {
@@ -375,6 +393,7 @@ final class PetController: NSObject {
         panel.setFrame(CGRect(origin: savedFloatingOrigin(), size: Self.size(for: scale)), display: true)
         render()
         layoutFloating()
+        trackMouse()
     }
 
     private func startFlight(_ f: Flight) {
@@ -499,6 +518,8 @@ final class PetController: NSObject {
         if !isTransitioning && open.isSettled && expand.isSettled && squash.isSettled && tilt.isSettled {
             motionTimer?.invalidate()
             motionTimer = nil
+            // The layout just settled under a cursor that may not move: re-check hover and click-through.
+            trackMouse()
         }
     }
 
@@ -692,6 +713,58 @@ final class PetController: NSObject {
     }
 
     // MARK: Mouse
+
+    // Hybrid mouse tracking, the cheapest in both cases (measured). Still mouse: one event monitor
+    // waits for the first move, costing nothing. Moving mouse: receiving every move event (60–1000 Hz)
+    // costs more than looking 30 times a second, so the monitors are removed and a 30 Hz poll runs
+    // until the mouse has been still for half a second.
+    // Mouse events need no Accessibility permission for a global monitor, only keys do.
+
+    private func listenForMouse() {
+        guard mouseMonitors.isEmpty else { return }
+        let moves: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
+        // Global: moves sent to other apps. Local: those sent to us.
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: moves, handler: { [weak self] _ in self?.mouseStarted() }) {
+            mouseMonitors.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: moves, handler: { [weak self] event in
+            self?.mouseStarted()
+            return event
+        }) {
+            mouseMonitors.append(local)
+        }
+    }
+
+    private func mouseStarted() {
+        guard mousePoll == nil else { return }
+        // Removing a monitor from inside its own handler is supported, but do it on the next turn anyway.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.mouseMonitors.forEach(NSEvent.removeMonitor)
+            self.mouseMonitors.removeAll()
+        }
+        stillPolls = 0
+        lastMousePosition = NSEvent.mouseLocation
+        trackMouse()
+        let timer = Timer(timeInterval: 1 / 30, repeats: true) { [weak self] _ in self?.pollMouse() }
+        RunLoop.main.add(timer, forMode: .common)
+        mousePoll = timer
+    }
+
+    private func pollMouse() {
+        let position = NSEvent.mouseLocation
+        if position == lastMousePosition {
+            stillPolls += 1
+            guard stillPolls >= 15 else { return }
+            mousePoll?.invalidate()
+            mousePoll = nil
+            listenForMouse()
+            return
+        }
+        stillPolls = 0
+        lastMousePosition = position
+        trackMouse()
+    }
 
     private func trackMouse() {
         guard panel.isVisible else { return }
