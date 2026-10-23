@@ -1,67 +1,13 @@
 import AppKit
 
-/// The panel that opens from the menu bar icon: the live pet on its stage, the usage rings and the
-/// settings. Everything is drawn by hand in Claude's colors (cream paper by day, warm charcoal by night),
-/// and drawn in `draw(_:)` rather than with layers so `/control` snapshots render it too.
-struct PanelTheme {
-    let background, card, stroke, text, secondary, tertiary, track, accent, knob: NSColor
-
-    static func current(_ appearance: NSAppearance) -> PanelTheme {
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
-    }
-
-    static let dark = PanelTheme(
-        background: hex(0x262624), card: hex(0x30302E), stroke: NSColor.white.withAlphaComponent(0.08),
-        text: hex(0xFAF9F5), secondary: hex(0xB4B2A7), tertiary: hex(0x85837B),
-        track: NSColor.white.withAlphaComponent(0.1), accent: hex(0xD97757), knob: hex(0xFAF9F5)
-    )
-    static let light = PanelTheme(
-        background: hex(0xFAF9F5), card: hex(0xF0EEE6), stroke: NSColor.black.withAlphaComponent(0.08),
-        text: hex(0x1F1E1D), secondary: hex(0x5E5D59), tertiary: hex(0x8F8D85),
-        track: NSColor.black.withAlphaComponent(0.09), accent: hex(0xC96442), knob: .white
-    )
-
-    /// Anthropic's clay, sky and olive, one per gauge.
-    static let gaugeColors = [hex(0xD97757), hex(0x6A9BCC), hex(0x788C5D)]
-    static let warning = hex(0xE0A43C)
-    static let danger = hex(0xD0533F)
-
-    static func hex(_ rgb: UInt32) -> NSColor {
-        NSColor(srgbRed: CGFloat(rgb >> 16 & 0xFF) / 255, green: CGFloat(rgb >> 8 & 0xFF) / 255,
-                blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
-    }
-}
-
-private extension NSFont {
-    /// New York, the system serif: Claude's headings are set in a serif too.
-    static func serif(_ size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
-        let base = NSFont.systemFont(ofSize: size, weight: weight)
-        return base.fontDescriptor.withDesign(.serif).flatMap { NSFont(descriptor: $0, size: size) } ?? base
-    }
-}
-
-private extension String {
-    func attributed(_ font: NSFont, _ color: NSColor, kern: CGFloat = 0, wraps: Bool = false) -> NSAttributedString {
-        let style = NSMutableParagraphStyle()
-        style.lineBreakMode = wraps ? .byWordWrapping : .byTruncatingTail
-        return NSAttributedString(string: self, attributes: [
-            .font: font, .foregroundColor: color, .kern: kern, .paragraphStyle: style,
-        ])
-    }
-}
-
-private extension NSAttributedString {
-    /// Single line, truncated to `width`, top-left at `point` (flipped views).
-    func draw(at point: CGPoint, width: CGFloat) {
-        draw(with: CGRect(x: point.x, y: point.y, width: width, height: size().height),
-             options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
-    }
-}
+/// The panel that opens from the menu bar icon: the live pet on its stage, the usage rings, and a footer
+/// that leads to the settings window. Drawn by hand with `PanelTheme` (see PanelKit.swift).
 
 // MARK: - Window and controller
 
 final class ControlPanelWindow: NSPanel {
     var onCancel: (() -> Void)?
+    var onSettings: (() -> Void)?
 
     init() {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -81,6 +27,10 @@ final class ControlPanelWindow: NSPanel {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "q" {
             NSApp.terminate(nil)
+            return true
+        }
+        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == ",", let onSettings {
+            onSettings()
             return true
         }
         return super.performKeyEquivalent(with: event)
@@ -224,15 +174,9 @@ final class ControlPanelView: NSView {
         var sessions = 0
         var gauges: [QuotaStore.Reading] = []
         var usageStatus = ""
-        var petVisible = true
-        var notch = false
-        var notchAvailable = false
-        var transitioning = false
-        var usageAPI = true
-        var scale = 5
-        /// Where the pet sits on its screen, 0…1 from the bottom-left corner; nil when unknown.
-        var spot: CGPoint?
+        /// Short server line for the footer ("Listening"), the full address goes in its tooltip.
         var server = ""
+        var serverDetail = ""
         var serverOK = true
     }
 
@@ -240,42 +184,31 @@ final class ControlPanelView: NSView {
     private static let pad: CGFloat = 14
 
     var model = Model() { didSet { apply() } }
-    var onToggleVisible: (() -> Void)?
-    var onToggleNotch: (() -> Void)?
-    var onToggleUsageAPI: (() -> Void)?
-    var onScale: ((Int) -> Void)?
-    var onCorner: ((PetController.Corner) -> Void)?
     var onPoke: (() -> Void)?
+    var onSettings: (() -> Void)?
     var onQuit: (() -> Void)?
 
     let stage = PetStage()
-    private let visibleRow = SettingRow(accessory: PanelToggle())
-    private let notchRow = SettingRow(accessory: PanelToggle())
-    private let usageRow = SettingRow(accessory: PanelToggle())
-    private let sizeRow = SettingRow(accessory: SizePicker())
-    private let positionRow = SettingRow(accessory: CornerPicker())
+    private let settingsButton = FooterButton(title: tr("Réglages…", "Settings…"), shortcut: "⌘,")
     private let quitButton = FooterButton(title: tr("Quitter", "Quit"), shortcut: "⌘Q")
-    private var rows: [SettingRow] { [visibleRow, notchRow, usageRow, sizeRow, positionRow] }
 
-    // Layout, top to bottom.
+    // Layout, top to bottom: stage, usage title, rings and their labels, a hairline, the footer.
     private static let stageRect = CGRect(x: pad, y: pad, width: width - 2 * pad, height: 112)
     private static let usageTitleY: CGFloat = stageRect.maxY + 18
     private static let ringsY: CGFloat = usageTitleY + 24
     private static let ringSize: CGFloat = 50
-    private static let settingsTitleY: CGFloat = ringsY + ringSize + 58
-    private static let cardY: CGFloat = settingsTitleY + 24
+    private static let separatorY: CGFloat = ringsY + ringSize + 50
+    private static let footerY: CGFloat = separatorY + 8
+    static let preferredHeight: CGFloat = footerY + 24 + 9
+    var preferredHeight: CGFloat { Self.preferredHeight }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         addSubview(stage)
-        rows.forEach(addSubview)
+        addSubview(settingsButton)
         addSubview(quitButton)
         stage.onPoke = { [weak self] in self?.onPoke?() }
-        visibleRow.onClick = { [weak self] in self?.onToggleVisible?() }
-        notchRow.onClick = { [weak self] in self?.onToggleNotch?() }
-        usageRow.onClick = { [weak self] in self?.onToggleUsageAPI?() }
-        (sizeRow.accessory as! SizePicker).onPick = { [weak self] in self?.onScale?($0) }
-        (positionRow.accessory as! CornerPicker).onPick = { [weak self] in self?.onCorner?($0) }
+        settingsButton.onClick = { [weak self] in self?.onSettings?() }
         quitButton.onClick = { [weak self] in self?.onQuit?() }
         apply()
     }
@@ -285,53 +218,25 @@ final class ControlPanelView: NSView {
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    private var cardHeight: CGFloat { rows.map(\.rowHeight).reduce(0, +) }
-    private var footerY: CGFloat { Self.cardY + cardHeight + 12 }
-    var preferredHeight: CGFloat { footerY + 28 + Self.pad - 4 }
-
     private func apply() {
-        let m = model
-        stage.model = m
-        visibleRow.title = tr("Afficher le pet", "Show the pet")
-        visibleRow.subtitle = m.petVisible ? tr("Visible sur le bureau", "Visible on the desktop") : tr("Masqué : les demandes restent dans Claude", "Hidden: requests stay in Claude")
-        (visibleRow.accessory as! PanelToggle).isOn = m.petVisible
-
-        notchRow.title = tr("Vivre dans l'encoche", "Live in the notch")
-        notchRow.subtitle = m.notchAvailable ? tr("Se loge à côté de la caméra", "Settles next to the camera") : tr("Aucune encoche sur cet écran", "No notch on this screen")
-        notchRow.isEnabled = m.notchAvailable && !m.transitioning
-        (notchRow.accessory as! PanelToggle).isOn = m.notch
-
-        usageRow.title = tr("Quotas du compte", "Account quotas")
-        usageRow.subtitle = tr("Lus via Claude Code, toutes les 5 min", "Read through Claude Code, every 5 min")
-        (usageRow.accessory as! PanelToggle).isOn = m.usageAPI
-
-        sizeRow.title = tr("Taille", "Size")
-        sizeRow.subtitle = "Pixels ×\(m.scale)"
-        sizeRow.isClickable = false
-        (sizeRow.accessory as! SizePicker).scale = m.scale
-
-        positionRow.title = tr("Position", "Position")
-        positionRow.subtitle = m.notch ? tr("Fixée par l'encoche", "Set by the notch") : tr("Choisis un coin de l'écran", "Pick a corner of the screen")
-        positionRow.isClickable = false
-        let corners = positionRow.accessory as! CornerPicker
-        corners.spot = m.spot
-        corners.docked = m.notch
-        corners.isEnabled = !m.notch && !m.transitioning
-
-        needsLayout = true
+        stage.model = model
         needsDisplay = true
     }
 
     override func layout() {
         super.layout()
         stage.frame = Self.stageRect
-        var y = Self.cardY
-        for row in rows {
-            row.frame = CGRect(x: Self.pad, y: y, width: bounds.width - 2 * Self.pad, height: row.rowHeight)
-            y += row.rowHeight
-        }
-        let quit = quitButton.fittingSize
-        quitButton.frame = CGRect(x: bounds.width - Self.pad - quit.width + 6, y: footerY + 2, width: quit.width, height: quit.height)
+        // The footer buttons hang off the right edge, their hover plate aligned with the cards' edge.
+        let quit = quitButton.fittingSize, settings = settingsButton.fittingSize
+        quitButton.frame = CGRect(x: bounds.width - Self.pad - quit.width + 6, y: Self.footerY, width: quit.width, height: quit.height)
+        settingsButton.frame = CGRect(x: quitButton.frame.minX - settings.width - 2, y: Self.footerY,
+                                      width: settings.width, height: settings.height)
+        removeAllToolTips()
+        addToolTip(CGRect(x: 0, y: Self.footerY, width: settingsButton.frame.minX, height: 24), owner: self, userData: nil)
+    }
+
+    @objc func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        model.serverDetail
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -357,24 +262,16 @@ final class ControlPanelView: NSView {
             centered(gauge.note.attributed(.systemFont(ofSize: 10.5), theme.tertiary), x: x + 4, width: column - 8, y: Self.ringsY + Self.ringSize + 24)
         }
 
-        sectionTitle(tr("Réglages", "Settings"), y: Self.settingsTitleY, theme: theme)
-        let card = NSBezierPath(roundedRect: CGRect(x: pad, y: Self.cardY, width: inner, height: cardHeight), xRadius: 11, yRadius: 11)
-        theme.card.setFill()
-        card.fill()
-        // Hairlines between rows, inset like the system's grouped lists.
+        // Hairline over the footer, full width like a menu's separator.
         theme.stroke.setFill()
-        var y = Self.cardY
-        for row in rows.dropLast() {
-            y += row.rowHeight
-            CGRect(x: pad + 12, y: y - 0.5, width: inner - 24, height: 1).fill()
-        }
+        CGRect(x: pad, y: Self.separatorY - 0.5, width: inner, height: 1).fill()
 
         // Footer: is the hooks' server listening?
-        let dot = CGRect(x: pad + 2, y: footerY + 12, width: 6, height: 6)
+        let dot = CGRect(x: pad + 2, y: Self.footerY + 9, width: 6, height: 6)
         (model.serverOK ? PanelTheme.gaugeColors[2] : PanelTheme.danger).setFill()
         NSBezierPath(ovalIn: dot).fill()
-        let server = model.server.attributed(.monospacedDigitSystemFont(ofSize: 11, weight: .regular), theme.tertiary)
-        server.draw(at: CGPoint(x: dot.maxX + 7, y: footerY + 8), width: quitButton.frame.minX - dot.maxX - 14)
+        let server = model.server.attributed(.systemFont(ofSize: 11), theme.tertiary)
+        server.draw(at: CGPoint(x: dot.maxX + 7, y: Self.footerY + 5), width: settingsButton.frame.minX - dot.maxX - 12)
     }
 
     private func sectionTitle(_ title: String, y: CGFloat, theme: PanelTheme) {
@@ -421,13 +318,13 @@ final class ControlPanelView: NSView {
         number.draw(at: CGPoint(x: center.x - size.width / 2, y: center.y - size.height / 2))
     }
 
-    /// Tests: the toggles and pickers, by name.
+    /// Tests: the footer buttons and the stage, by name.
     func press(_ name: String) {
         switch name {
-        case "visible": onToggleVisible?()
-        case "notch": onToggleNotch?()
-        case "usage": onToggleUsageAPI?()
-        default: if let scale = Int(name.dropFirst()), name.hasPrefix("x") { onScale?(scale) }
+        case "settings": onSettings?()
+        case "pet": onPoke?()
+        case "quit": onQuit?()
+        default: break
         }
     }
 }
@@ -541,319 +438,6 @@ final class PetStage: NSView {
     }
 }
 
-// MARK: - Rows and controls
-
-/// Title and subtitle on the left, a control on the right. Clicking anywhere on a toggle's row flips it.
-final class SettingRow: NSView {
-    let accessory: NSView
-    var title = "" { didSet { needsDisplay = true } }
-    var subtitle = "" { didSet { needsDisplay = true } }
-    var isEnabled = true {
-        didSet {
-            needsDisplay = true
-            (accessory as? PanelToggle)?.isEnabled = isEnabled
-        }
-    }
-    /// False for rows whose control takes the clicks itself (pickers).
-    var isClickable = true
-    var onClick: (() -> Void)?
-    private var hovered = false { didSet { needsDisplay = true } }
-    private var pressed = false {
-        didSet { (accessory as? PanelToggle)?.pressed = pressed }
-    }
-
-    var rowHeight: CGFloat { accessory is CornerPicker ? 54 : 48 }
-
-    init(accessory: NSView) {
-        self.accessory = accessory
-        super.init(frame: .zero)
-        addSubview(accessory)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    override var isFlipped: Bool { true }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func layout() {
-        super.layout()
-        let size = accessory.fittingSize
-        accessory.frame = CGRect(x: bounds.width - 12 - size.width, y: (bounds.height - size.height) / 2,
-                                 width: size.width, height: size.height)
-    }
-
-    override func updateTrackingAreas() {
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
-    }
-
-    override func mouseEntered(with event: NSEvent) { hovered = true }
-    override func mouseExited(with event: NSEvent) { hovered = false }
-    override func mouseDown(with event: NSEvent) { pressed = isClickable && isEnabled }
-    override func mouseUp(with event: NSEvent) {
-        let fire = pressed && bounds.contains(convert(event.locationInWindow, from: nil))
-        pressed = false
-        if fire { onClick?() }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let theme = PanelTheme.current(effectiveAppearance)
-        if hovered, isClickable, isEnabled {
-            theme.text.withAlphaComponent(0.04).setFill()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 3), xRadius: 8, yRadius: 8).fill()
-        }
-        let alpha: CGFloat = isEnabled ? 1 : 0.45
-        let textWidth = accessory.frame.minX - 24
-        let titleY = (bounds.height - 32) / 2
-        title.attributed(.systemFont(ofSize: 13, weight: .medium), theme.text.withAlphaComponent(alpha))
-            .draw(at: CGPoint(x: 12, y: titleY), width: textWidth)
-        subtitle.attributed(.systemFont(ofSize: 11), theme.tertiary.withAlphaComponent(alpha))
-            .draw(at: CGPoint(x: 12, y: titleY + 18), width: textWidth)
-    }
-}
-
-/// A switch whose knob springs across, and stretches while held.
-final class PanelToggle: NSView {
-    var isOn = false {
-        didSet {
-            guard oldValue != isOn else { return }
-            position.target = isOn ? 1 : 0
-            if window?.isVisible == true { animate() } else { position.snap(to: position.target) }
-            needsDisplay = true
-        }
-    }
-    var isEnabled = true { didSet { needsDisplay = true } }
-    var pressed = false {
-        didSet {
-            stretch.target = pressed ? 1 : 0
-            animate()
-        }
-    }
-    private var position = Spring(value: 0, target: 0, stiffness: 420, damping: 30)
-    private var stretch = Spring(value: 0, target: 0, stiffness: 500, damping: 34)
-    private var timer: Timer?
-
-    override var fittingSize: NSSize { NSSize(width: 34, height: 20) }
-    override var isFlipped: Bool { true }
-    // The row handles the clicks.
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    private func animate() {
-        guard timer == nil else { return }
-        let timer = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] timer in
-            guard let self else { return timer.invalidate() }
-            self.position.step(1 / 60)
-            self.stretch.step(1 / 60)
-            self.needsDisplay = true
-            if self.position.isSettled, self.stretch.isSettled {
-                timer.invalidate()
-                self.timer = nil
-            }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let theme = PanelTheme.current(effectiveAppearance)
-        let p = min(1, max(0, position.value))
-        let alpha: CGFloat = isEnabled ? 1 : 0.4
-        // The accent fades in over the translucent track as the knob travels.
-        let track = NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2)
-        theme.track.withAlphaComponent(theme.track.alphaComponent * 1.6 * alpha).setFill()
-        track.fill()
-        theme.accent.withAlphaComponent(p * alpha).setFill()
-        track.fill()
-
-        let inset: CGFloat = 2
-        let knobSize = bounds.height - 2 * inset
-        let knobWidth = knobSize + 5 * stretch.value
-        let x = inset + (bounds.width - 2 * inset - knobWidth) * position.value
-        let knob = CGRect(x: x, y: inset, width: knobWidth, height: knobSize)
-        let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.25)
-        shadow.shadowOffset = NSSize(width: 0, height: -1)
-        shadow.shadowBlurRadius = 2
-        NSGraphicsContext.saveGraphicsState()
-        shadow.set()
-        theme.knob.withAlphaComponent(alpha).setFill()
-        NSBezierPath(roundedRect: knob, xRadius: knobSize / 2, yRadius: knobSize / 2).fill()
-        NSGraphicsContext.restoreGraphicsState()
-    }
-}
-
-/// Six pixels growing in size, one per scale (×3…×8): the pet's size, said in its own material.
-final class SizePicker: NSView {
-    static let scales = Array(3...8)
-    var scale = 5 { didSet { needsDisplay = true } }
-    var onPick: ((Int) -> Void)?
-    private var hovered: Int? { didSet { needsDisplay = true } }
-    private let cell: CGFloat = 20
-
-    override var fittingSize: NSSize { NSSize(width: cell * CGFloat(Self.scales.count), height: 24) }
-    override var isFlipped: Bool { true }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    private func index(at event: NSEvent) -> Int? {
-        let p = convert(event.locationInWindow, from: nil)
-        guard bounds.contains(p) else { return nil }
-        return min(Self.scales.count - 1, Int(p.x / cell))
-    }
-
-    override func updateTrackingAreas() {
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
-    }
-
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
-    override func mouseMoved(with event: NSEvent) { hovered = index(at: event) }
-    override func mouseExited(with event: NSEvent) { hovered = nil }
-    override func mouseDown(with event: NSEvent) {}
-    override func mouseUp(with event: NSEvent) {
-        guard let i = index(at: event) else { return }
-        onPick?(Self.scales[i])
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let theme = PanelTheme.current(effectiveAppearance)
-        for (i, s) in Self.scales.enumerated() {
-            let side = CGFloat(4 + 2 * (s - 3))
-            let rect = CGRect(x: CGFloat(i) * cell + (cell - side) / 2, y: bounds.height - 4 - side, width: side, height: side)
-            let color: NSColor
-            if s == scale { color = theme.accent }
-            else if i == hovered { color = theme.text.withAlphaComponent(0.7) }
-            else { color = theme.tertiary.withAlphaComponent(0.45) }
-            color.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5).fill()
-        }
-    }
-}
-
-/// A miniature of the screen: the pet's actual spot, and a ghost in the corner under the cursor.
-final class CornerPicker: NSView {
-    var spot: CGPoint? { didSet { needsDisplay = true } }
-    var docked = false { didSet { needsDisplay = true } }
-    var isEnabled = true { didSet { needsDisplay = true } }
-    var onPick: ((PetController.Corner) -> Void)?
-    private var hovered: PetController.Corner? { didSet { needsDisplay = true } }
-
-    override var fittingSize: NSSize { NSSize(width: 60, height: 38) }
-    override var isFlipped: Bool { true }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    private func corner(at event: NSEvent) -> PetController.Corner? {
-        let p = convert(event.locationInWindow, from: nil)
-        guard isEnabled, bounds.contains(p) else { return nil }
-        let left = p.x < bounds.midX, top = p.y < bounds.midY
-        return top ? (left ? .topLeft : .topRight) : (left ? .bottomLeft : .bottomRight)
-    }
-
-    override func updateTrackingAreas() {
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
-    }
-
-    override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
-    override func mouseMoved(with event: NSEvent) { hovered = corner(at: event) }
-    override func mouseExited(with event: NSEvent) { hovered = nil }
-    override func mouseDown(with event: NSEvent) {}
-    override func mouseUp(with event: NSEvent) {
-        if let c = corner(at: event) { onPick?(c) }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let theme = PanelTheme.current(effectiveAppearance)
-        let alpha: CGFloat = isEnabled || docked ? 1 : 0.45
-        let screen = bounds.insetBy(dx: 1, dy: 1)
-        let outline = NSBezierPath(roundedRect: screen, xRadius: 5, yRadius: 5)
-        theme.background.withAlphaComponent(alpha).setFill()
-        outline.fill()
-
-        NSGraphicsContext.saveGraphicsState()
-        outline.addClip()
-        // Menu bar strip.
-        theme.track.withAlphaComponent(theme.track.alphaComponent * 1.4 * alpha).setFill()
-        CGRect(x: screen.minX, y: screen.minY, width: screen.width, height: 5).fill()
-        NSGraphicsContext.restoreGraphicsState()
-        theme.tertiary.withAlphaComponent(0.6 * alpha).setStroke()
-        outline.lineWidth = 1
-        outline.stroke()
-
-        let area = screen.insetBy(dx: 4, dy: 4).offsetBy(dx: 0, dy: 2.5).insetBy(dx: 0, dy: 1.5)
-        let pet = CGSize(width: 7, height: 6)
-        func rect(for corner: PetController.Corner) -> CGRect {
-            let left = corner == .topLeft || corner == .bottomLeft
-            let top = corner == .topLeft || corner == .topRight
-            return CGRect(x: left ? area.minX : area.maxX - pet.width, y: top ? area.minY : area.maxY - pet.height,
-                          width: pet.width, height: pet.height)
-        }
-
-        if let hovered {
-            theme.accent.withAlphaComponent(0.35).setFill()
-            NSBezierPath(roundedRect: rect(for: hovered), xRadius: 1.5, yRadius: 1.5).fill()
-        }
-        if docked {
-            // The notch, and the pet beside it.
-            theme.text.withAlphaComponent(0.85).setFill()
-            NSBezierPath(roundedRect: CGRect(x: screen.midX - 7, y: screen.minY, width: 14, height: 5), xRadius: 2, yRadius: 2).fill()
-            theme.accent.setFill()
-            NSBezierPath(roundedRect: CGRect(x: screen.midX + 8, y: screen.minY, width: 5, height: 4), xRadius: 1, yRadius: 1).fill()
-        } else if let spot {
-            let x = area.minX + (area.width - pet.width) * min(1, max(0, spot.x))
-            let y = area.minY + (area.height - pet.height) * (1 - min(1, max(0, spot.y)))
-            theme.accent.withAlphaComponent(alpha).setFill()
-            NSBezierPath(roundedRect: CGRect(x: x, y: y, width: pet.width, height: pet.height), xRadius: 1.5, yRadius: 1.5).fill()
-        }
-    }
-}
-
-final class FooterButton: NSView {
-    let title: String
-    let shortcut: String
-    var onClick: (() -> Void)?
-    private var hovered = false { didSet { needsDisplay = true } }
-
-    init(title: String, shortcut: String) {
-        self.title = title
-        self.shortcut = shortcut
-        super.init(frame: .zero)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    override var isFlipped: Bool { true }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override var fittingSize: NSSize {
-        let w = title.attributed(.systemFont(ofSize: 12, weight: .medium), .black).size().width
-            + shortcut.attributed(.systemFont(ofSize: 11), .black).size().width
-        return NSSize(width: ceil(w) + 26, height: 24)
-    }
-
-    override func updateTrackingAreas() {
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
-    }
-
-    override func mouseEntered(with event: NSEvent) { hovered = true }
-    override func mouseExited(with event: NSEvent) { hovered = false }
-    override func mouseDown(with event: NSEvent) {}
-    override func mouseUp(with event: NSEvent) {
-        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let theme = PanelTheme.current(effectiveAppearance)
-        if hovered {
-            theme.card.setFill()
-            NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7).fill()
-        }
-        let label = title.attributed(.systemFont(ofSize: 12, weight: .medium), hovered ? theme.text : theme.secondary)
-        let key = shortcut.attributed(.systemFont(ofSize: 11), theme.tertiary)
-        let y = (bounds.height - label.size().height) / 2
-        label.draw(at: CGPoint(x: 9, y: y))
-        key.draw(at: CGPoint(x: 9 + label.size().width + 7, y: y + 1))
-    }
-}
 
 // MARK: - Menu bar icon
 

@@ -11,6 +11,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var server: EventServer!
     private var statusItem: NSStatusItem!
     private let panel = ControlPanel()
+    private let settings = SettingsController()
+    /// Read when the settings window comes forward and after each action, not on every refresh.
+    private var hookStatus: HookSetup.Status?
+    private var hookBackups: (original: HookSetup.Backup?, latest: HookSetup.Backup?)
+    private var hookMessage: (text: String, isError: Bool)?
     private var serverStatus = tr("démarrage…", "starting…")
     /// One-shot timer to the next moment something changes on its own (see `scheduleWake`).
     private var wakeTimer: Timer?
@@ -58,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.sendAction(on: [.leftMouseDown, .rightMouseDown])
         }
         setUpPanel()
+        setUpSettings()
 
         let port = ProcessInfo.processInfo.environment["CLAUDE_PET_PORT"].flatMap(UInt16.init) ?? Self.defaultPort
         server = EventServer(preferredPort: port)
@@ -130,9 +136,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Tests: "light" / "dark" for the panel only, "" follows the system again.
             if let look = control["panel_appearance"] as? String {
                 self.panel.window.appearance = look.isEmpty ? nil : NSAppearance(named: look == "dark" ? .darkAqua : .aqua)
-                self.panel.view.needsDisplay = true
-                self.panel.view.subviews.forEach { $0.needsDisplay = true; $0.subviews.forEach { $0.needsDisplay = true } }
+                Self.redraw(self.panel.view)
             }
+            // Tests: the settings window, the same way.
+            if let open = control["settings"] as? Bool { open ? self.openSettings() : self.settings.close() }
+            if let look = control["settings_appearance"] as? String {
+                self.settings.window.appearance = look.isEmpty ? nil : NSAppearance(named: look == "dark" ? .darkAqua : .aqua)
+                Self.redraw(self.settings.view)
+            }
+            if let name = control["settings_press"] as? String { self.settings.view.press(name) }
+            if let path = control["settings_snapshot"] as? String { self.settings.snapshot(to: path) }
         }
         server.stateProvider = { [unowned self] in
             var snapshot = self.tracker.snapshot()
@@ -199,6 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             leaderFolder: leader?.cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
         ).map { ($0.value, $0.detail) })
         panel.refresh()
+        settings.refresh()
         scheduleWake()
     }
 
@@ -226,32 +240,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setUpPanel() {
         panel.modelProvider = { [unowned self] in self.panelModel() }
-        let view = panel.view
-        view.onToggleVisible = { [unowned self] in
-            self.pet.isVisible ? self.pet.hide() : self.pet.show()
-            self.panel.refresh()
-        }
-        view.onToggleNotch = { [unowned self] in
-            self.pet.setNotchMode(!self.pet.wantsNotch)
-            self.panel.refresh()
-            // The flight takes about a second: show where the pet landed.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.panel.refresh() }
-        }
-        view.onToggleUsageAPI = { [unowned self] in
-            OAuthUsageSource.isEnabled.toggle()
-            OAuthUsageSource.isEnabled ? self.usageAPI.start() : self.usageAPI.stop()
-            self.panel.refresh()
-        }
-        view.onScale = { [unowned self] in
-            self.pet.setScale($0)
-            self.panel.refresh()
-        }
-        view.onCorner = { [unowned self] in
-            self.pet.move(to: $0)
-            self.panel.refresh()
-        }
-        view.onPoke = { [unowned self] in self.wakeUp() }
-        view.onQuit = { NSApp.terminate(nil) }
+        panel.view.onPoke = { [unowned self] in self.wakeUp() }
+        panel.view.onSettings = { [unowned self] in self.openSettings() }
+        panel.window.onSettings = { [unowned self] in self.openSettings() }
+        panel.view.onQuit = { NSApp.terminate(nil) }
+    }
+
+    private static func redraw(_ view: NSView) {
+        view.needsDisplay = true
+        view.subviews.forEach(redraw)
     }
 
     private func panelModel() -> ControlPanelView.Model {
@@ -265,28 +262,128 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.project = folder
         m.sessions = tracker.sessions.count
         m.gauges = quotas.gauges(leader: leader?.id, leaderFolder: folder)
+        m.usageStatus = usageLine()
+        m.serverOK = server.port != nil
+        m.server = server.port == nil ? serverLine() : tr("En écoute", "Listening")
+        m.serverDetail = serverLine()
+        return m
+    }
+
+    private func usageLine() -> String {
         var usage = tr("Compte : ", "Account: ") + usageAPI.status
         if let last = usageAPI.lastSuccess, !usageAPI.isUpToDate {
             usage += tr(" · il y a \(QuotaStore.duration(last, Date()))", " · \(QuotaStore.duration(last, Date())) ago")
         }
-        m.usageStatus = usage
+        return usage
+    }
+
+    private func serverLine() -> String {
+        if let port = server.port { return tr("En écoute", "Listening") + " · 127.0.0.1:\(port)" }
+        return serverStatus.prefix(1).uppercased() + serverStatus.dropFirst()
+    }
+
+    // MARK: Settings window
+
+    private func openSettings() {
+        panel.close()
+        settings.open()
+    }
+
+    private func reloadHooks() {
+        let setup = HookSetup.standard
+        hookStatus = setup.status()
+        let original = setup.originalBackup(), latest = setup.latestBackup()
+        // The same file twice would offer the same restore twice.
+        hookBackups = (original, latest.flatMap { $0.url == original?.url ? nil : $0 })
+    }
+
+    private func setUpSettings() {
+        settings.modelProvider = { [unowned self] in self.settingsModel() }
+        settings.onActivate = { [unowned self] in self.reloadHooks() }
+        let view = settings.view
+        view.onToggleVisible = { [unowned self] in
+            self.pet.isVisible ? self.pet.hide() : self.pet.show()
+            self.settings.refresh()
+        }
+        view.onToggleNotch = { [unowned self] in
+            self.pet.setNotchMode(!self.pet.wantsNotch)
+            self.settings.refresh()
+            // The flight takes about a second: show where the pet landed.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.settings.refresh() }
+        }
+        view.onToggleUsageAPI = { [unowned self] in
+            OAuthUsageSource.isEnabled.toggle()
+            OAuthUsageSource.isEnabled ? self.usageAPI.start() : self.usageAPI.stop()
+            self.settings.refresh()
+        }
+        view.onScale = { [unowned self] in
+            self.pet.setScale($0)
+            self.settings.refresh()
+        }
+        view.onCorner = { [unowned self] in
+            self.pet.move(to: $0)
+            self.settings.refresh()
+        }
+        view.onInstall = { [unowned self] in
+            let wasInstalled = (self.hookStatus?.installedHooks ?? 0) > 0
+            self.runHookAction { try HookSetup.standard.install() } done: { report in
+                guard report.changed else { return tr("Déjà à jour : rien n'a changé", "Already up to date: nothing changed") }
+                return (wasInstalled ? tr("Réinstallé", "Reinstalled") : tr("Installé", "Installed")) + Self.backupNote(report)
+            }
+        }
+        view.onUninstall = { [unowned self] in
+            self.runHookAction { try HookSetup.standard.uninstall() } done: { report in
+                report.changed ? tr("Désinstallé", "Uninstalled") + Self.backupNote(report) : tr("Rien à désinstaller", "Nothing to uninstall")
+            }
+        }
+        view.onRestore = { [unowned self] backup in
+            self.runHookAction { try HookSetup.standard.restore(backup) } done: { report in
+                let what = backup.isOriginal ? tr("Copie d'origine restaurée", "Original copy restored")
+                                             : tr("Copie du \(SettingsView.format(backup.date)) restaurée", "Copy from \(SettingsView.format(backup.date)) restored")
+                return what + (report.backupURL.map { tr(" · fichier actuel copié dans ", " · current file copied to ") + $0.lastPathComponent } ?? "")
+            }
+        }
+    }
+
+    private static func backupNote(_ report: HookSetup.Report) -> String {
+        report.backupURL.map { tr(" · sauvegarde : ", " · backup: ") + $0.lastPathComponent } ?? ""
+    }
+
+    /// Runs an install, uninstall or restore, then shows its outcome and the new state.
+    private func runHookAction(_ action: () throws -> HookSetup.Report, done: (HookSetup.Report) -> String) {
+        do {
+            hookMessage = (done(try action()), false)
+        } catch {
+            hookMessage = (tr("Échec : ", "Failed: ") + error.localizedDescription, true)
+        }
+        reloadHooks()
+        settings.refresh()
+    }
+
+    private func settingsModel() -> SettingsView.Model {
+        var m = SettingsView.Model()
         m.petVisible = pet.isVisible
         m.notch = pet.wantsNotch
         m.notchAvailable = pet.notchAvailable
         m.transitioning = pet.isTransitioning
-        m.usageAPI = OAuthUsageSource.isEnabled
         m.scale = pet.scale
         if pet.mode == .floating, let screen = pet.panel.screen ?? NSScreen.main {
             let area = screen.visibleFrame, frame = pet.panel.frame
             let free = CGSize(width: max(1, area.width - frame.width), height: max(1, area.height - frame.height))
             m.spot = CGPoint(x: (frame.minX - area.minX) / free.width, y: (frame.minY - area.minY) / free.height)
         }
-        if let port = server.port {
-            m.server = tr("En écoute", "Listening") + " · 127.0.0.1:\(port)"
-        } else {
-            m.server = serverStatus.prefix(1).uppercased() + serverStatus.dropFirst()
-            m.serverOK = false
-        }
+        m.usageAPI = OAuthUsageSource.isEnabled
+        m.usageStatus = usageLine()
+        m.usageHealthy = OAuthUsageSource.isEnabled ? usageAPI.isUpToDate : nil
+        m.hooks = hookStatus
+        m.settingsPath = (HookSetup.standard.settingsURL.path as NSString).abbreviatingWithTildeInPath
+        m.hookMessage = hookMessage?.text
+        m.hookMessageIsError = hookMessage?.isError ?? false
+        m.originalBackup = hookBackups.original
+        m.latestBackup = hookBackups.latest
+        m.version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        m.server = serverLine()
+        m.serverOK = server.port != nil
         return m
     }
 
@@ -345,6 +442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(submenu: size, title: tr("Taille", "Size"))
 
         menu.addItem(.separator())
+        menu.addItem(action: tr("Réglages…", "Settings…"), key: ",") { [unowned self] in self.openSettings() }
         menu.addItem(action: tr("Quitter Claude Pet", "Quit Claude Pet"), key: "q") { NSApp.terminate(nil) }
         return menu
     }
