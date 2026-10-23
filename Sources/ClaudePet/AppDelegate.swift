@@ -116,6 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pet.requestView.onAllow = { [unowned self] in self.requests.allow($0) }
         pet.requestView.onDeny = { [unowned self] in self.requests.deny($0) }
         pet.requestView.onAnswer = { [unowned self] in self.requests.answer($0, $1) }
+        pet.requestView.onUnderstood = { [unowned self] _ in self.tutorial?.understood() }
         pet.requestView.onDismiss = { [unowned self] id in
             // "Ignorer": Claude's dialog keeps the request, the pet stops alerting for it.
             if let request = self.requests.queue.first(where: { $0.id == id }),
@@ -303,7 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// whatever Claude is doing.
     private func shownDisplay() -> (state: PetState, tool: ToolKind?) {
         if let until = wavingUntil, Date() < until { return (.waving, nil) }
-        // The tutorial's "Claude needs you": the real alert sprite, without a request.
+        // The tutorial's explanation is a request too: the pet raises its hand for it.
         if pet.demoAlert { return (.waiting, nil) }
         return tracker.display()
     }

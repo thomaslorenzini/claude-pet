@@ -259,13 +259,15 @@ final class PetController: NSObject {
     /// The request the user has opened once: no more banner or pill for it, only the alert sprite.
     private var seenRequestID: Int?
     private var requestSeen: Bool { request != nil && request?.id == seenRequestID }
-    /// Tutorial: "Claude needs you" shown without any request (banner in the notch, pill when floating),
-    /// with nothing to open or answer. A real request takes over by itself.
-    private(set) var demoAlert = false
-    private var showsDemoAlert: Bool { demoAlert && request == nil }
-    /// The banner or pill is wanted: a request not opened yet, or the tutorial's demo.
-    private var attentionTarget: CGFloat { request == nil ? (showsDemoAlert ? 1 : 0) : (requestSeen ? 0 : 1) }
-    /// The app redraws the pet's state (the alert sprite) when the demo starts or stops.
+    /// The banner or pill is wanted: a request not opened yet.
+    private var attentionTarget: CGFloat { request == nil || requestSeen ? 0 : 1 }
+    /// Claude's own request, and the tutorial's explanation, shown in its place only when Claude has none.
+    private var realRequest: PendingRequest?
+    private var realWaiting = 0
+    private var demoRequest: PendingRequest?
+    /// The tutorial's explanation is out (the app shows the alert sprite meanwhile).
+    var demoAlert: Bool { demoRequest != nil }
+    /// The app redraws the pet's state (the alert sprite) when the explanation comes or goes.
     var onDemoAlertChange: (() -> Void)?
     /// Floating: the cursor is over the pet's body, or over the card.
     private var petHovered = false
@@ -376,6 +378,23 @@ final class PetController: NSObject {
 
     /// The request to show (nil: none), and how many others wait behind it.
     func showRequest(_ request: PendingRequest?, waiting: Int) {
+        realRequest = request
+        realWaiting = waiting
+        display(request ?? demoRequest, waiting: request == nil ? 0 : waiting)
+    }
+
+    /// The tutorial's explanation, as a request (nil: none). A real request keeps priority.
+    func setDemoRequest(_ demo: PendingRequest?) {
+        guard demo?.id != demoRequest?.id else { return }
+        demoRequest = demo
+        if realRequest == nil { display(demo, waiting: 0) }
+        onDemoAlertChange?()
+    }
+
+    /// The request is open: the notch panel revealed, or the floating card expanded.
+    var isRequestOpen: Bool { request != nil && (mode == .notch ? reveal.target > 0.5 : card.isExpanded) }
+
+    private func display(_ request: PendingRequest?, waiting: Int) {
         let had = self.request != nil
         self.request = request
         requestView.show(request, waiting: waiting)
@@ -391,15 +410,6 @@ final class PetController: NSObject {
         attention.target = attentionTarget
         syncRequestUI()
         startMotion()
-    }
-
-    func setDemoAlert(_ on: Bool) {
-        guard on != demoAlert else { return }
-        demoAlert = on
-        attention.target = attentionTarget
-        syncRequestUI()
-        startMotion()
-        onDemoAlertChange?()
     }
 
     /// The "Claude needs you" pill above the floating pet, when shown.
@@ -457,13 +467,8 @@ final class PetController: NSObject {
     /// Floating: the card opens while the cursor is on the pet or on the card. Before the first
     /// opening, a pill says Claude needs you; after it, only the pet's alert sprite does.
     private func updateFloatingCard() {
-        guard mode == .floating, request != nil || showsDemoAlert, panel.isVisible else {
+        guard mode == .floating, request != nil, panel.isVisible else {
             hideCard()
-            return
-        }
-        // The demo's pill only: there is nothing to open.
-        if request == nil {
-            card.show(requestView, near: panel.frame, expanded: false)
             return
         }
         if overCard || petHovered || typing {
@@ -1026,7 +1031,7 @@ final class PetController: NSObject {
             if panel.ignoresMouseEvents == hit { panel.ignoresMouseEvents = !hit }
             if hit != petHovered {
                 petHovered = hit
-                if request != nil || showsDemoAlert { updateFloatingCard() }
+                if request != nil { updateFloatingCard() }
             }
         case .notch:
             let inBox = view.hitsBox(at: local)
@@ -1043,8 +1048,7 @@ final class PetController: NSObject {
                 if request != nil {
                     reveal.target = 1
                     seenRequestID = request?.id
-                } else if !showsDemoAlert {
-                    // The demo keeps its banner: no gauges over it.
+                } else {
                     expand.target = 1
                 }
                 HapticPulse.strong()

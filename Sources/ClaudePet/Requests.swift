@@ -20,6 +20,9 @@ struct PendingRequest {
         /// `title` says what Claude wants to do, `body` is the command, file or URL, `note` its description.
         case permission(tool: String, title: String, body: String, note: String?)
         case questions([Question])
+        /// The first-run tutorial, shown by the pet like a request; nothing goes to Claude. `detail` replaces
+        /// `body` after "Je n'ai pas compris".
+        case explanation(title: String, body: String, detail: String)
     }
 
     let id: Int

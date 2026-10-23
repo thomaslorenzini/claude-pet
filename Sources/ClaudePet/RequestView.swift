@@ -9,6 +9,8 @@ final class RequestView: NSView, NSTextFieldDelegate {
     var onAnswer: ((Int, [String: String]) -> Void)?
     /// Leave it to Claude Code's own dialog.
     var onDismiss: ((Int) -> Void)?
+    /// "J'ai compris" on the tutorial's explanation.
+    var onUnderstood: ((Int) -> Void)?
     /// The "Autre" field wants the keyboard (true) or is done with it. The container lets its window
     /// become key only meanwhile: a pet that took the keyboard on every click would steal typing.
     var onEditing: ((Bool) -> Void)?
@@ -22,6 +24,8 @@ final class RequestView: NSView, NSTextFieldDelegate {
     /// "Autre": a free answer typed in, like the last row of Claude's own question dialog.
     private var other = false
     private var otherText = ""
+    /// "Je n'ai pas compris" was pressed: the explanation's longer text shows.
+    private var explained = false
     private weak var otherField: NSTextField?
     private weak var confirmButton: PillButton?
     /// The "Autre" field has the keyboard: the panel must stay open even if the cursor leaves it.
@@ -47,6 +51,7 @@ final class RequestView: NSView, NSTextFieldDelegate {
             selected = []
             other = false
             otherText = ""
+            explained = false
         }
         self.request = request
         self.waiting = waiting
@@ -87,6 +92,23 @@ final class RequestView: NSView, NSTextFieldDelegate {
                 PillButton(title: tr("Refuser", "Deny"), style: .secondary) { [weak self] in self?.onDeny?(id) },
                 PillButton(title: tr("Autoriser", "Allow"), style: .primary) { [weak self] in self?.onAllow?(id) },
             ], y: y, width: width)
+
+        case let .explanation(title, body, detail):
+            y = addLabel(caption("Claude Pet · " + tr("Tutoriel", "Tutorial")), y: y, width: width)
+            y = addLabel(heading(title), y: y + 2, width: width, lines: 3)
+            y = addLabel(explanationText(explained ? detail : body), y: y + 6, width: width, lines: 0)
+            y += 14
+            let id = request.id
+            let understood = PillButton(title: tr("J'ai compris", "Got it"), style: .primary) { [weak self] in self?.onUnderstood?(id) }
+            if explained {
+                addButtons([understood], y: y, width: width)
+            } else {
+                let confused = PillButton(title: tr("Je n'ai pas compris", "I don't get it"), style: .secondary) { [weak self] in
+                    self?.explained = true
+                    self?.rebuild()
+                }
+                addButtons([confused, understood], y: y, width: width)
+            }
 
         case let .questions(questions):
             let index = min(questionIndex, questions.count - 1)
@@ -265,6 +287,15 @@ final class RequestView: NSView, NSTextFieldDelegate {
     private func heading(_ s: String) -> NSAttributedString {
         NSAttributedString(string: s, attributes: [
             .font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.white,
+        ])
+    }
+
+    /// Running text, easier to read than `detail` over several lines.
+    private func explanationText(_ s: String) -> NSAttributedString {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 2
+        return NSAttributedString(string: s, attributes: [
+            .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.white.withAlphaComponent(0.78), .paragraphStyle: style,
         ])
     }
 
