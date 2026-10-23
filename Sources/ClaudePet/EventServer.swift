@@ -9,6 +9,7 @@ import Network
 /// - `POST /event`: body is a JSON object (the Claude Code hook stdin as-is, or anything with
 ///   `hook_event_name` / `pet_state`). Always answers 200 quickly.
 /// - `POST /control`: app settings, e.g. `{"notch": true}`.
+/// - `POST /status`: the Claude Code status line JSON, forwarded by the status line bridge.
 /// - `GET /state`: current aggregated state, for debugging.
 final class EventServer {
     static let maxBodySize = 32 * 1024 * 1024
@@ -16,6 +17,8 @@ final class EventServer {
     var onEvent: (([String: Any]) -> Void)?
     /// `POST /control`, e.g. `{"notch": true}`.
     var onControl: (([String: Any]) -> Void)?
+    /// `POST /status`: the Claude Code status line JSON (quotas, context window).
+    var onStatus: (([String: Any]) -> Void)?
     /// Called on the main queue.
     var stateProvider: (() -> [String: Any])?
     var onStatusChange: ((String) -> Void)?
@@ -149,12 +152,13 @@ final class EventServer {
             }
             DispatchQueue.main.async { self.onEvent?(object) }
             send(status: "200 OK", body: #"{"ok":true}"#, on: connection)
-        case ("POST", "/control"):
+        case ("POST", "/control"), ("POST", "/status"):
             guard let object = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any] else {
                 send(status: "400 Bad Request", body: #"{"ok":false,"error":"expected a JSON object"}"#, on: connection)
                 return
             }
-            DispatchQueue.main.async { self.onControl?(object) }
+            let handler = request.path == "/status" ? onStatus : onControl
+            DispatchQueue.main.async { handler?(object) }
             send(status: "200 OK", body: #"{"ok":true}"#, on: connection)
         case ("GET", "/state"):
             DispatchQueue.main.async {

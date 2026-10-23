@@ -41,6 +41,18 @@ final class PetView: NSView {
     var pivot: CGPoint? { didSet { needsDisplay = true } }
     /// Black notch box, drawn behind the sprite.
     var boxPath: CGPath? { didSet { needsDisplay = true } }
+
+    struct Gauge {
+        var rect: CGRect
+        /// 0…1, nil when unknown (only the track is drawn).
+        var value: Double?
+        var color: NSColor
+        var lineWidth: CGFloat
+        var showsNumber: Bool
+    }
+    var gauges: [Gauge] = [] { didSet { needsDisplay = true } }
+    /// Detail label under the box, centered on `anchor` (its top).
+    var tooltip: (text: String, anchor: CGPoint)? { didSet { needsDisplay = true } }
     var contextMenuProvider: (() -> NSMenu)?
     var onMouseDown: (() -> Void)?
     var onMouseDragged: (() -> Void)?
@@ -55,6 +67,8 @@ final class PetView: NSView {
             ctx.addPath(boxPath)
             ctx.fillPath()
         }
+        gauges.forEach { draw($0, in: ctx) }
+        if let tooltip { drawTooltip(tooltip.text, anchor: tooltip.anchor) }
         guard let image = canvas.makeImage(), spriteRect.width > 0 else { return }
         ctx.saveGState()
         ctx.interpolationQuality = .none
@@ -65,6 +79,45 @@ final class PetView: NSView {
         ctx.translateBy(x: -p.x, y: -p.y)
         ctx.draw(image, in: spriteRect)
         ctx.restoreGState()
+    }
+
+    private func draw(_ g: Gauge, in ctx: CGContext) {
+        let r = g.rect.insetBy(dx: g.lineWidth / 2, dy: g.lineWidth / 2)
+        ctx.saveGState()
+        ctx.setLineWidth(g.lineWidth)
+        ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.16).cgColor)
+        ctx.strokeEllipse(in: r)
+        if let v = g.value, v > 0 {
+            // Clockwise from 12 o'clock, like the system's own progress rings.
+            ctx.setStrokeColor(g.color.cgColor)
+            ctx.setLineCap(.round)
+            ctx.addArc(
+                center: CGPoint(x: r.midX, y: r.midY), radius: r.width / 2,
+                startAngle: .pi / 2, endAngle: .pi / 2 - 2 * .pi * CGFloat(v), clockwise: true
+            )
+            ctx.strokePath()
+        }
+        ctx.restoreGState()
+        guard g.showsNumber, let v = g.value else { return }
+        let text = NSAttributedString(string: "\(Int((v * 100).rounded()))", attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: r.width * 0.42, weight: .semibold),
+            .foregroundColor: NSColor.white,
+        ])
+        let size = text.size()
+        text.draw(at: CGPoint(x: g.rect.midX - size.width / 2, y: g.rect.midY - size.height / 2))
+    }
+
+    private func drawTooltip(_ string: String, anchor: CGPoint) {
+        let text = NSAttributedString(string: string, attributes: [
+            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: NSColor.white,
+        ])
+        let size = text.size()
+        var frame = CGRect(x: anchor.x - size.width / 2 - 8, y: anchor.y - 6 - size.height - 8, width: size.width + 16, height: size.height + 8)
+        frame.origin.x = min(max(frame.minX, bounds.minX + 2), bounds.maxX - frame.width - 2)
+        NSColor(white: 0.08, alpha: 0.94).setFill()
+        NSBezierPath(roundedRect: frame, xRadius: 7, yRadius: 7).fill()
+        text.draw(at: CGPoint(x: frame.minX + 8, y: frame.minY + 4))
     }
 
     /// True when `point` (view coordinates) lands on a visible pixel of the sprite.
@@ -161,6 +214,16 @@ final class PetController: NSObject {
     private var tilt = Spring(value: 0, target: 0, stiffness: 240, damping: 13)
     private var drag: Drag?
     private var drop: Drop?
+
+    /// Gauge colors, in `QuotaStore.Kind` order: 5 h, week, context.
+    private static let gaugeColors = [
+        NSColor(srgbRed: 0.29, green: 0.56, blue: 1.0, alpha: 1),
+        NSColor(srgbRed: 0.70, green: 0.42, blue: 1.0, alpha: 1),
+        NSColor(srgbRed: 0.24, green: 0.84, blue: 0.55, alpha: 1),
+    ]
+    private var gaugeValues: [Double?] = [nil, nil, nil]
+    private var gaugeDetails = ["", "", ""]
+    private var hoveredGauge: Int?
     private var motionTimer: Timer?
     private var lastStep = CACurrentMediaTime()
     private var hovering = false
@@ -267,6 +330,25 @@ final class PetController: NSObject {
         if mode == .notch { layoutNotch() }
     }
 
+    func updateGauges(_ gauges: [(value: Double?, detail: String)]) {
+        let values = gauges.map(\.value), details = gauges.map(\.detail)
+        guard values != gaugeValues || details != gaugeDetails else { return }
+        gaugeValues = values
+        gaugeDetails = details
+        if mode == .notch { layoutNotch() }
+    }
+
+    /// Box outline and gauges for a layout, in view coordinates.
+    private func applyBox(_ geometry: NotchGeometry, _ l: NotchGeometry.Layout, origin: CGPoint) {
+        view.boxPath = geometry.path(for: l, origin: origin)
+        view.gauges = l.gauges.enumerated().map { i, rect in
+            PetView.Gauge(
+                rect: rect.offsetBy(dx: -origin.x, dy: -origin.y), value: gaugeValues[i],
+                color: Self.gaugeColors[i], lineWidth: l.gaugeLineWidth, showsNumber: l.expand > 0.7
+            )
+        }
+    }
+
     private func dock(in geometry: NotchGeometry, settleBox: Bool = false) {
         notch = geometry
         mode = .notch
@@ -351,20 +433,22 @@ final class PetController: NSObject {
             }
             return
         }
-        view.boxPath = geometry.path(for: geometry.layout(open: open.value, expand: expand.value), origin: origin)
+        applyBox(geometry, geometry.layout(open: open.value, expand: expand.value), origin: origin)
     }
 
     private func layoutNotch() {
         guard let geometry = notch else { return }
         let l = geometry.layout(open: open.value, expand: expand.value)
         let origin = panel.frame.origin
-        view.boxPath = geometry.path(for: l, origin: origin)
+        applyBox(geometry, l, origin: origin)
         view.spriteRect = l.sprite.offsetBy(dx: -origin.x, dy: -origin.y)
         view.squash = squash.value
     }
 
     private func layoutFloating() {
         view.boxPath = nil
+        view.gauges = []
+        view.tooltip = nil
         view.rotation = 0
         view.spriteRect = view.bounds
         view.squash = squash.value
@@ -589,11 +673,13 @@ final class PetController: NSObject {
     }
 
     private func updateBoxDuringTransition(origin: CGPoint) {
+        view.tooltip = nil
         guard let geometry = notch, open.value > 0.001 else {
             view.boxPath = nil
+            view.gauges = []
             return
         }
-        view.boxPath = geometry.path(for: geometry.layout(open: open.value, expand: expand.value), origin: origin)
+        applyBox(geometry, geometry.layout(open: open.value, expand: expand.value), origin: origin)
     }
 
     // MARK: Mouse
@@ -622,7 +708,25 @@ final class PetController: NSObject {
                 startMotion()
             }
             if panel.ignoresMouseEvents == inBox { panel.ignoresMouseEvents = !inBox }
+            updateTooltip(at: local)
         }
+    }
+
+    /// Detail label for the gauge under the cursor, refreshed at the mouse polling rate so the
+    /// countdowns stay live.
+    private func updateTooltip(at local: CGPoint) {
+        let index = hovering ? view.gauges.firstIndex { $0.rect.insetBy(dx: -3, dy: -3).contains(local) } : nil
+        if index != hoveredGauge {
+            hoveredGauge = index
+            if index != nil { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
+        }
+        guard let index, let bottom = view.boxPath?.boundingBoxOfPath.minY else {
+            if view.tooltip != nil { view.tooltip = nil }
+            return
+        }
+        let text = gaugeDetails[index]
+        let anchor = CGPoint(x: view.gauges[index].rect.midX, y: bottom)
+        if view.tooltip?.text != text || view.tooltip?.anchor != anchor { view.tooltip = (text, anchor) }
     }
 
     // MARK: Helpers

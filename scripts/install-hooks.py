@@ -4,6 +4,9 @@
 Idempotent: our entries are tagged with MARKER, removed first, then re-added.
 Other hooks are left untouched. Shows a diff and asks before writing; backs up the file.
 
+The status line (the only place Claude Code exposes quotas and context usage) is wrapped by
+statusline-bridge.sh: the original command is saved next to it and still runs, unchanged.
+
     install-hooks.py install   [--dry-run] [--yes] [--settings PATH]
     install-hooks.py uninstall [--dry-run] [--yes] [--settings PATH]
 """
@@ -19,6 +22,11 @@ import sys
 import tempfile
 
 MARKER = "# claude-pet-hook"
+STATUS_MARKER = "# claude-pet-statusline"
+SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/claude-pet")
+BRIDGE_SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline-bridge.sh")
+BRIDGE = os.path.join(SUPPORT_DIR, "statusline.sh")
+ORIGINAL = os.path.join(SUPPORT_DIR, "statusline-original")
 # Written by the app once its server listens: "<port> <pid>". The port can change if it was taken.
 ENDPOINT = "$HOME/Library/Application Support/claude-pet/endpoint"
 
@@ -89,6 +97,42 @@ def add_ours(settings):
         hooks.setdefault(event, []).append(group)
 
 
+def is_wrapped(settings):
+    sl = settings.get("statusLine")
+    return isinstance(sl, dict) and STATUS_MARKER in str(sl.get("command", ""))
+
+
+def wrap_statusline(settings):
+    """Points the status line at the bridge. Returns the original command to save, or None if
+    the status line was already wrapped (the saved original is then kept)."""
+    if is_wrapped(settings):
+        return None
+    sl = settings.get("statusLine")
+    original = sl.get("command", "") if isinstance(sl, dict) and sl.get("type") == "command" else ""
+    settings["statusLine"] = {**(sl if isinstance(sl, dict) else {}), "type": "command",
+                              "command": f'/bin/sh "{BRIDGE}" {STATUS_MARKER}'}
+    return original
+
+
+def unwrap_statusline(settings):
+    if not is_wrapped(settings):
+        return
+    original = ""
+    if os.path.exists(ORIGINAL):
+        with open(ORIGINAL, encoding="utf-8") as f:
+            original = f.read().strip()
+    if original:
+        settings["statusLine"]["command"] = original
+    else:
+        del settings["statusLine"]
+
+
+def install_bridge():
+    os.makedirs(SUPPORT_DIR, mode=0o700, exist_ok=True)
+    shutil.copyfile(BRIDGE_SOURCE, BRIDGE)
+    os.chmod(BRIDGE, 0o755)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("action", choices=["install", "uninstall"])
@@ -110,10 +154,18 @@ def main():
 
     updated = copy.deepcopy(settings)
     strip_ours(updated)
+    original_statusline = None
     if args.action == "install":
         add_ours(updated)
+        original_statusline = wrap_statusline(updated)
+        if original_statusline == "":
+            print("Note : pas de status line existante, celle de Claude Pet n'affichera rien.")
+    else:
+        unwrap_statusline(updated)
 
     if updated == settings:
+        if args.action == "install" and not args.dry_run:
+            install_bridge()
         print("Rien à changer : settings.json est déjà à jour.")
         return
 
@@ -142,12 +194,23 @@ def main():
         shutil.copy2(path, backup)
         print(f"Sauvegarde : {backup}")
 
+    if args.action == "install":
+        install_bridge()
+        if original_statusline is not None:
+            with open(ORIGINAL, "w", encoding="utf-8") as f:
+                f.write(original_statusline + "\n")
+            print(f"Status line d'origine sauvegardée : {ORIGINAL}")
+
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".settings.", suffix=".json")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(new_text)
     if os.path.exists(path):
         shutil.copymode(path, tmp)
     os.replace(tmp, path)
+    if args.action == "uninstall":
+        for f in (BRIDGE, ORIGINAL):
+            if os.path.exists(f):
+                os.remove(f)
     print(f"{args.action} terminé : {path}")
 
 

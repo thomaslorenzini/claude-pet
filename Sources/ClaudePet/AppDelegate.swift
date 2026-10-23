@@ -4,11 +4,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static let defaultPort: UInt16 = 47319
 
     private let tracker = SessionTracker()
+    private let quotas = QuotaStore()
     private var pet: PetController!
     private var server: EventServer!
     private var statusItem: NSStatusItem!
     private var serverStatus = "démarrage…"
     private var tickTimer: Timer?
+    private var ticks = 0
     private var termSource: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -39,6 +41,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         server.onEvent = { [unowned self] event in
             self.tracker.handle(event)
+            if let id = event["session_id"] as? String {
+                if event["hook_event_name"] as? String == "SessionEnd" {
+                    self.quotas.forget(session: id)
+                } else if let transcript = event["transcript_path"] as? String {
+                    TranscriptUsage.read(transcript) { tokens in
+                        self.quotas.estimateContext(session: id, tokens: tokens)
+                        self.refresh()
+                    }
+                }
+            }
+            self.refresh()
+        }
+        server.onStatus = { [unowned self] status in
+            self.quotas.handleStatus(status)
             self.refresh()
         }
         server.onControl = { [unowned self] control in
@@ -50,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         server.stateProvider = { [unowned self] in
             var snapshot = self.tracker.snapshot()
             snapshot["port"] = self.server.port.map { Int($0) } ?? NSNull()
+            snapshot["quotas"] = self.quotas.snapshot()
             snapshot["notch"] = self.pet.mode != .floating
             snapshot["notch_radius"] = Double(NotchGeometry.bottomRadius)
             snapshot["notch_ear"] = Double(NotchGeometry.earRadius)
@@ -62,6 +79,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         server.start()
 
         tickTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [unowned self] _ in
+            self.ticks += 1
+            // Claude Desktop rewrites its usage history at most every 270 s: a stat every 30 s is plenty.
+            if self.ticks % 120 == 0 { self.quotas.reloadDesktopHistory() }
             self.tracker.tick()
             self.refresh()
         }
@@ -74,6 +94,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func refresh() {
         let display = tracker.display()
         pet.update(state: display.state, tool: display.tool)
+        let leader = tracker.leader
+        pet.updateGauges(quotas.gauges(
+            leader: leader?.id,
+            leaderFolder: leader?.cwd.map { URL(fileURLWithPath: $0).lastPathComponent }
+        ))
     }
 
     // MARK: Menu

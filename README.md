@@ -39,6 +39,29 @@ jusqu'à sa dernière position flottante. Le choix est mémorisé au relancement
 - Le cadre déplié recouvre temporairement les icônes de barre des menus qui sont juste à droite de l'encoche.
 - Si l'encoche disparaît (écran externe seul, capot fermé), le pet revient en mode flottant.
 
+### Jauges d'usage
+
+Dans l'encoche, trois anneaux entourent le pet : **bleu** en bas à gauche pour le quota 5 h, **violet** en bas à droite
+pour le quota de la semaine, **vert** en haut à droite pour la fenêtre de contexte de la session suivie. Au survol, ils
+grandissent avec le cadre et affichent leur pourcentage. Passer sur un anneau affiche le détail (« Quota 5 h : 50 % ·
+reset dans 2 h 04 »).
+
+Aucune source officielle ne stocke ces chiffres. Le pet les lit en lecture seule, et la donnée la plus récente gagne :
+
+| Source | Donne | Quand |
+|---|---|---|
+| Ligne de statut de Claude Code (relais `statusline.sh`) | quotas 5 h et semaine, contexte exact | sessions `claude` dans un terminal (Desktop ne l'exécute pas) ; quotas pour Pro/Max, après la première réponse |
+| `~/Library/Application Support/Claude/plan-usage-history.json` | quotas | quand Claude Desktop l'écrit (au plus toutes les 270 s ; parfois plus du tout) |
+| Transcript de la session (chemin reçu avec chaque hook) | contexte estimé (« ≈ », taille de fenêtre supposée : 200k, ou 1M au-delà) | toutes les sessions, Desktop compris |
+
+Une donnée trop vieille pour sa fenêtre, ou dont la fenêtre a été réinitialisée, est affichée comme inconnue (anneau
+vide), jamais comme 0 %. L'endpoint `/usage` de claude.ai donnerait des quotas frais dans Desktop, mais il exige le
+cookie de session du compte : il n'est volontairement pas utilisé.
+
+`install-hooks.py` remplace la commande de ta ligne de statut par le relais, qui transmet le JSON au pet puis lance ta
+commande d'origine (sauvegardée dans `~/Library/Application Support/claude-pet/statusline-original`) : l'affichage du
+terminal ne change pas. `uninstall` la remet en place.
+
 ### Glisser-déposer vers l'encoche et hors de l'encoche
 
 On peut aussi changer de mode à la main, sans le menu :

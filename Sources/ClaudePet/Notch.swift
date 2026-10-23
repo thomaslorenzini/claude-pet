@@ -43,7 +43,8 @@ struct NotchGeometry {
     static let expandedScale: CGFloat = 4
 
     let screen: NSScreen
-    /// Global x of the notch's right edge.
+    /// Global x of the notch's left and right edges.
+    let notchMinX: CGFloat
     let notchMaxX: CGFloat
     /// Global y of the top of the screen.
     let top: CGFloat
@@ -53,7 +54,8 @@ struct NotchGeometry {
 
     static func find() -> NotchGeometry? {
         for screen in NSScreen.screens {
-            guard screen.safeAreaInsets.top > 0, let right = screen.auxiliaryTopRightArea else { continue }
+            guard screen.safeAreaInsets.top > 0, let right = screen.auxiliaryTopRightArea,
+                  let left = screen.auxiliaryTopLeftArea else { continue }
             // These areas are expressed in the screen's own space on current macOS; guard against global.
             let offset = right.maxX > screen.frame.width + 1 ? 0 : screen.frame.minX
             let height = screen.safeAreaInsets.top
@@ -61,6 +63,7 @@ struct NotchGeometry {
             let fit = (height - 4) / CGFloat(SpriteComposer.compactHeight)
             return NotchGeometry(
                 screen: screen,
+                notchMinX: left.maxX + offset,
                 notchMaxX: right.minX + offset,
                 top: screen.frame.maxY,
                 height: height,
@@ -75,6 +78,12 @@ struct NotchGeometry {
         var sprite: CGRect
         var bottomRadius: CGFloat
         var fillet: CGFloat
+        /// Gauge circles, in `QuotaStore.Kind` order: 5 h (bottom left of the pet), week (bottom
+        /// right), context (top right). They move with the box.
+        var gauges: [CGRect]
+        var gaugeLineWidth: CGFloat
+        /// Hover progress, used to show the numbers inside the gauges once they are big enough.
+        var expand: CGFloat
     }
 
     // Apple does not expose the notch's shape: these defaults are eyeballed on a 14" MacBook Pro and
@@ -97,34 +106,46 @@ struct NotchGeometry {
         let e = max(-0.2, expand)
         let scale = max(collapsedScale * 0.8, lerp(collapsedScale, Self.expandedScale, e))
         let spriteSize = CGSize(width: CGFloat(SpriteComposer.compactWidth) * scale, height: CGFloat(SpriteComposer.compactHeight) * scale)
-        let pad = lerp(6, 14, e)
+        let pad = lerp(5, 12, e)
+        let gap = lerp(2, 8, e)
+        let ring = lerp(9, 20, max(0, e))
+        let inset = lerp(4, 9, max(0, e))
         let boxHeight = max(height, lerp(height, spriteSize.height + 16, e))
         let r = Self.bottomRadius, ear = Self.earRadius
-        let fullWidth = pad * 2 + spriteSize.width
+        let fullWidth = pad + ring + gap + spriteSize.width + gap + ring + pad
         // Sliding rather than widening keeps the corners intact while the box comes out. Overshoot is
-        // ignored here: past 1 the box's left edge would leave the notch and reveal a gap.
-        let slide = max(0, 1 - open) * (fullWidth + ear + 1)
+        // ignored here: past 1 the box's left edge would leave the notch and reveal a gap. Nor may it
+        // slide past the notch's left edge, where it would show.
         let overlap = max(Self.overlap, r + 4)
+        let slide = min(max(0, 1 - open) * (fullWidth + ear + 1), notchMaxX - overlap - notchMinX)
         let box = CGRect(
             x: notchMaxX - overlap - slide, y: top - boxHeight,
             width: overlap + fullWidth, height: boxHeight
         )
         // The seat does not move with the box: a pet landing while the box is still settling stays put.
         let sprite = CGRect(
-            x: notchMaxX + pad, y: box.minY + (boxHeight - spriteSize.height) / 2,
+            x: notchMaxX + pad + ring + gap, y: box.minY + (boxHeight - spriteSize.height) / 2,
             width: spriteSize.width, height: spriteSize.height
         )
-        return Layout(box: box, sprite: sprite, bottomRadius: min(r, boxHeight / 2, fullWidth / 2), fillet: ear)
+        let left = box.minX + overlap + pad, right = box.maxX - pad - ring
+        let gauges = [
+            CGRect(x: left, y: box.minY + inset, width: ring, height: ring),
+            CGRect(x: right, y: box.minY + inset, width: ring, height: ring),
+            CGRect(x: right, y: box.maxY - inset - ring, width: ring, height: ring),
+        ]
+        return Layout(
+            box: box, sprite: sprite, bottomRadius: min(r, boxHeight / 2, fullWidth / 2), fillet: ear,
+            gauges: gauges, gaugeLineWidth: lerp(1.75, 3, max(0, e)), expand: e
+        )
     }
 
-    /// Compact panel used while docked: big enough for the expanded box plus spring overshoot, and for
-    /// the box sliding back under the notch.
+    /// Compact panel used while docked: big enough for the expanded box plus spring overshoot, the box
+    /// sliding back under the notch, and the gauge tooltips below the box.
     var panelFrame: CGRect {
         let full = layout(open: 1, expand: 1.25)
-        return CGRect(
-            x: full.box.minX - full.box.width - 12, y: full.box.minY - 8,
-            width: full.box.width * 2 + 36, height: full.box.height + 8
-        )
+        let minX = notchMinX - 12
+        let minY = full.box.minY - 44
+        return CGRect(x: minX, y: minY, width: full.box.maxX + 240 - minX, height: top - minY)
     }
 
     /// Box outline in the coordinates of a view whose origin sits at `origin` on screen.
