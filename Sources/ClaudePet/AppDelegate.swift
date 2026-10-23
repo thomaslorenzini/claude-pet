@@ -9,8 +9,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var serverStatus = "démarrage…"
     private var tickTimer: Timer?
+    private var termSource: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // `kill`/`pkill` send SIGTERM, which skips applicationWillTerminate: route it through a normal quit
+        // so the endpoint file is removed.
+        signal(SIGTERM, SIG_IGN)
+        termSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        termSource?.setEventHandler { NSApp.terminate(nil) }
+        termSource?.resume()
+
         pet = PetController()
         pet.view.contextMenuProvider = { [unowned self] in self.buildMenu() }
         pet.show()
@@ -23,7 +31,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
 
         let port = ProcessInfo.processInfo.environment["CLAUDE_PET_PORT"].flatMap(UInt16.init) ?? Self.defaultPort
-        server = EventServer(port: port)
+        server = EventServer(preferredPort: port)
+        server.onReady = { port in Endpoint.publish(port: port) }
+        server.onDuplicate = { port in
+            NSLog("claude-pet: une autre instance tourne déjà sur le port %d, on quitte", Int(port))
+            NSApp.terminate(nil)
+        }
         server.onEvent = { [unowned self] event in
             self.tracker.handle(event)
             self.refresh()
@@ -36,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         server.stateProvider = { [unowned self] in
             var snapshot = self.tracker.snapshot()
+            snapshot["port"] = self.server.port.map { Int($0) } ?? NSNull()
             snapshot["notch"] = self.pet.mode != .floating
             snapshot["notch_radius"] = Double(NotchGeometry.bottomRadius)
             snapshot["notch_ear"] = Double(NotchGeometry.earRadius)
@@ -51,6 +65,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.tracker.tick()
             self.refresh()
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Endpoint.unpublish()
     }
 
     private func refresh() {

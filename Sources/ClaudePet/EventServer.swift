@@ -3,6 +3,9 @@ import Network
 
 /// Minimal HTTP/1.1 server bound to 127.0.0.1.
 ///
+/// If the preferred port is taken, it tries the next ones (`portAttempts` in all), unless the
+/// occupant is another Claude Pet: then `onDuplicate` fires instead, so two pets never run at once.
+///
 /// - `POST /event`: body is a JSON object (the Claude Code hook stdin as-is, or anything with
 ///   `hook_event_name` / `pet_state`). Always answers 200 quickly.
 /// - `POST /control`: app settings, e.g. `{"notch": true}`.
@@ -16,30 +19,59 @@ final class EventServer {
     /// Called on the main queue.
     var stateProvider: (() -> [String: Any])?
     var onStatusChange: ((String) -> Void)?
+    /// Called on the main queue with the port actually bound.
+    var onReady: ((UInt16) -> Void)?
+    /// Another Claude Pet answers on this port. Called on the main queue.
+    var onDuplicate: ((UInt16) -> Void)?
 
-    private let port: UInt16
+    static let portAttempts = 20
+
+    private let preferredPort: UInt16
+    private(set) var port: UInt16?
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "claude-pet.server")
 
-    init(port: UInt16) {
-        self.port = port
+    init(preferredPort: UInt16) {
+        self.preferredPort = preferredPort
     }
 
     func start() {
+        listen(on: preferredPort, attempt: 0)
+    }
+
+    private func listen(on port: UInt16, attempt: Int) {
+        let status: (String) -> Void = { message in DispatchQueue.main.async { self.onStatusChange?(message) } }
         do {
             let params = NWParameters.tcp
             params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!)
-            params.allowLocalEndpointReuse = true
+            // No reuse: a port held by anyone else must fail here, not be silently shared.
+            params.allowLocalEndpointReuse = false
             let listener = try NWListener(using: params)
-            listener.stateUpdateHandler = { [weak self] state in
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
                 guard let self else { return }
-                let status: String
                 switch state {
-                case .ready: status = "écoute sur 127.0.0.1:\(self.port)"
-                case .failed(let error): status = "erreur port \(self.port) : \(error)"
-                default: return
+                case .ready:
+                    self.port = port
+                    status("écoute sur 127.0.0.1:\(port)")
+                    DispatchQueue.main.async { self.onReady?(port) }
+                case .failed(let error):
+                    listener?.cancel()
+                    guard case .posix(.EADDRINUSE) = error else {
+                        status("erreur port \(port) : \(error)")
+                        return
+                    }
+                    self.probe(port) { isPet in
+                        if isPet {
+                            DispatchQueue.main.async { self.onDuplicate?(port) }
+                        } else if attempt + 1 < Self.portAttempts, port < UInt16.max {
+                            self.listen(on: port + 1, attempt: attempt + 1)
+                        } else {
+                            status("aucun port libre entre \(self.preferredPort) et \(port)")
+                        }
+                    }
+                default:
+                    break
                 }
-                DispatchQueue.main.async { self.onStatusChange?(status) }
             }
             listener.newConnectionHandler = { [weak self] connection in
                 self?.serve(connection)
@@ -47,8 +79,37 @@ final class EventServer {
             listener.start(queue: queue)
             self.listener = listener
         } catch {
-            onStatusChange?("erreur : \(error)")
+            status("erreur : \(error)")
         }
+    }
+
+    /// Asks whoever holds `port` whether it is a Claude Pet (`GET /health`). Raw TCP rather than
+    /// URLSession, so App Transport Security never gets in the way.
+    private func probe(_ port: UInt16, completion: @escaping (Bool) -> Void) {
+        let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        var done = false
+        let finish: (Bool) -> Void = { isPet in
+            guard !done else { return }
+            done = true
+            connection.cancel()
+            completion(isPet)
+        }
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                let request = "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+                connection.send(content: Data(request.utf8), completion: .contentProcessed { _ in })
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, _ in
+                    finish(data.map { String(decoding: $0, as: UTF8.self).contains(#""app":"claude-pet""#) } ?? false)
+                }
+            case .failed, .cancelled:
+                finish(false)
+            default:
+                break
+            }
+        }
+        connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 0.5) { finish(false) }
     }
 
     private func serve(_ connection: NWConnection) {

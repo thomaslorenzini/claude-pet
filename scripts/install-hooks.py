@@ -4,7 +4,7 @@
 Idempotent: our entries are tagged with MARKER, removed first, then re-added.
 Other hooks are left untouched. Shows a diff and asks before writing; backs up the file.
 
-    install-hooks.py install   [--dry-run] [--yes] [--port N] [--settings PATH]
+    install-hooks.py install   [--dry-run] [--yes] [--settings PATH]
     install-hooks.py uninstall [--dry-run] [--yes] [--settings PATH]
 """
 
@@ -19,7 +19,8 @@ import sys
 import tempfile
 
 MARKER = "# claude-pet-hook"
-DEFAULT_PORT = 47319
+# Written by the app once its server listens: "<port> <pid>". The port can change if it was taken.
+ENDPOINT = "$HOME/Library/Application Support/claude-pet/endpoint"
 
 # Events whose matcher filters on tool name; the others take no matcher.
 TOOL_EVENTS = ["PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"]
@@ -36,15 +37,17 @@ OTHER_EVENTS = [
 ]
 
 
-def hook_command(port):
+def hook_command():
+    # Find the pet through its endpoint file with shell builtins only (read, kill -0): when the pet
+    # is not running, the hook costs no extra process at all.
     # Synchronous on purpose: a background post lets a large PostToolUse overtake the next
     # PreToolUse and show the wrong state. Measured cost: ~10 ms per hook, ~30 ms for a 5 MB
-    # payload, near 0 when the app is down (connection refused), 1 s at most if it hangs.
+    # payload, 1 s at most if the app hangs.
     # "Expect:" stops curl from waiting for a 100-continue on bodies over 1 MB.
-    url = f"http://127.0.0.1:{port}/event"
     return (
-        "/bin/sh -c 'curl -s -m 1 --connect-timeout 0.2 -H \"Expect:\" -H \"Content-Type: application/json\" "
-        f"--data-binary @- {url} >/dev/null 2>&1; exit 0' {MARKER}"
+        f"/bin/sh -c 'f=\"{ENDPOINT}\"; read -r port pid < \"$f\" 2>/dev/null && kill -0 \"$pid\" 2>/dev/null && "
+        "curl -s -m 1 --connect-timeout 0.2 -H \"Expect:\" -H \"Content-Type: application/json\" "
+        f"--data-binary @- \"http://127.0.0.1:$port/event\" >/dev/null 2>&1; exit 0' {MARKER}"
     )
 
 
@@ -76,9 +79,9 @@ def strip_ours(settings):
         del settings["hooks"]
 
 
-def add_ours(settings, port):
+def add_ours(settings):
     hooks = settings.setdefault("hooks", {})
-    entry = {"type": "command", "command": hook_command(port), "timeout": 5}
+    entry = {"type": "command", "command": hook_command(), "timeout": 5}
     for event in TOOL_EVENTS + OTHER_EVENTS:
         group = {"hooks": [dict(entry)]}
         if event in TOOL_EVENTS:
@@ -90,7 +93,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("action", choices=["install", "uninstall"])
     parser.add_argument("--settings", default=os.path.expanduser("~/.claude/settings.json"))
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--dry-run", action="store_true", help="show the diff, write nothing")
     parser.add_argument("--yes", action="store_true", help="apply without asking")
     args = parser.parse_args()
@@ -109,7 +111,7 @@ def main():
     updated = copy.deepcopy(settings)
     strip_ours(updated)
     if args.action == "install":
-        add_ours(updated, args.port)
+        add_ours(updated)
 
     if updated == settings:
         print("Rien à changer : settings.json est déjà à jour.")

@@ -58,7 +58,10 @@ Pour une vraie app (sans icône Dock, lançable depuis le Finder ou au login) :
 scripts/bundle.sh && open build/ClaudePet.app
 ```
 
-Port : `CLAUDE_PET_PORT=12345 swift run ClaudePet` (passe le même `--port` à l'installeur).
+Port : 47319 par défaut (`CLAUDE_PET_PORT=12345 swift run ClaudePet` pour en préférer un autre). S'il est occupé,
+l'app essaie 47320, 47321… (20 essais). Si l'occupant est un autre Claude Pet, la nouvelle instance se ferme au lieu
+d'afficher un second pet. Le port obtenu est publié dans `~/Library/Application Support/claude-pet/endpoint`
+(`<port> <pid>`), et c'est là que les hooks le lisent : il n'y a rien à reconfigurer.
 
 ## Tester sans Claude
 
@@ -84,7 +87,9 @@ scripts/install-hooks.py uninstall           # retire uniquement nos hooks
 - Avant d'écrire, il copie le fichier dans `settings.json.claude-pet-backup-<date>`.
 - Les sessions Claude Code déjà ouvertes ne voient les nouveaux hooks qu'après redémarrage (ou via `/hooks`).
 
-Chaque hook lance `curl -m 1 --connect-timeout 0.2 … || exit 0` sur le JSON stdin du hook, et sort toujours avec 0.
+Chaque hook lit le fichier `endpoint` et vérifie que le pet est vivant (`kill -0 <pid>`), deux commandes internes au
+shell qui ne lancent aucun processus. Ensuite seulement, il envoie le JSON stdin du hook avec
+`curl -m 1 --connect-timeout 0.2`, puis sort toujours avec 0. Pet fermé : 0 à 10 ms, sans `curl`.
 
 **Pourquoi un envoi synchrone et pas en arrière-plan ?** En arrière-plan, un gros `PostToolUse` (sortie d'un Read
 de plusieurs Mo) arrivait *après* le `PreToolUse` suivant, et le pet affichait le mauvais état. En synchrone, Claude

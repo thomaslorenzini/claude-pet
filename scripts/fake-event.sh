@@ -7,8 +7,11 @@
 #   fake-event.sh multi     # two sessions in parallel
 #   fake-event.sh state     # prints the aggregated state
 #
-# SID=<id> picks the session (default: fake-session). CLAUDE_PET_PORT overrides the port.
+# SID=<id> picks the session (default: fake-session). CLAUDE_PET_PORT overrides the port, otherwise
+# it is read from the endpoint file the app writes (the port moves on if 47319 is taken).
 
+ENDPOINT="$HOME/Library/Application Support/claude-pet/endpoint"
+[ -z "$CLAUDE_PET_PORT" ] && [ -r "$ENDPOINT" ] && read -r CLAUDE_PET_PORT _ < "$ENDPOINT"
 PORT="${CLAUDE_PET_PORT:-47319}"
 URL="http://127.0.0.1:$PORT"
 SID="${SID:-fake-session}"
