@@ -72,7 +72,7 @@ Aucune source officielle ne stocke ces chiffres. Le pet les lit en lecture seule
 | API d'usage d'Anthropic (`api.anthropic.com/api/oauth/usage`), comme ccusage ou claude-hud | quotas 5 h et semaine, frais | partout, toutes les 5 min, si Claude Code est connecté (Pro/Max) |
 | Ligne de statut de Claude Code (relais `statusline.sh`) | quotas 5 h et semaine, contexte exact | sessions `claude` dans un terminal (Desktop ne l'exécute pas) ; quotas pour Pro/Max, après la première réponse |
 | `~/Library/Application Support/Claude/plan-usage-history.json` | quotas | quand Claude Desktop l'écrit (au plus toutes les 270 s ; parfois plus du tout) |
-| Transcript de la session (chemin reçu avec chaque hook) | contexte estimé (« ≈ », taille de fenêtre supposée : 200k, ou 1M au-delà) | toutes les sessions, Desktop compris |
+| Transcript de la session (chemin reçu avec chaque hook) | contexte estimé (« ≈ », taille de fenêtre supposée : 1M, sauf si la ligne de statut de la session donne la vraie) | toutes les sessions, Desktop compris |
 
 Une donnée trop vieille pour sa fenêtre, ou dont la fenêtre a été réinitialisée, est affichée comme inconnue (anneau
 vide), jamais comme 0 %.

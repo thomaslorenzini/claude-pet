@@ -116,9 +116,10 @@ final class QuotaStore {
     func estimateContext(session id: String, tokens: Int, now: Date = Date()) {
         if let existing = contexts[id], !existing.estimated, now.timeIntervalSince(existing.updated) < 120 { return }
         // The transcript does not say the window size: take it from a status line report of this
-        // session if there was one (never from an earlier guess), else 200k, or 1M once past it.
+        // session if there was one (never from an earlier guess), else 1M. Claude Code's current models
+        // run with a 1M window (an Opus session went past 540k): a 200k guess showed 5× too much.
         let known = contexts[id].flatMap { $0.estimated ? nil : $0.size }
-        let size = known ?? (tokens > 200_000 ? 1_000_000 : 200_000)
+        let size = known ?? 1_000_000
         contexts[id] = Context(
             usedPercentage: Double(tokens) / Double(size) * 100, size: size, updated: now, estimated: known == nil
         )
