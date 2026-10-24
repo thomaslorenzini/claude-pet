@@ -33,7 +33,7 @@ if let path = argument(after: "--export-icon") {
 }
 
 // `ClaudePet --onboarding-snapshot PATH [--state idle|installing|error|success] [--appearance light|dark]
-// [--no-statusline] [--checked] [--no-login]` renders the first-launch window to PNG and exits, without starting the app.
+// [--no-statusline] [--checked] [--no-login] [--max-height PT]` renders the first-launch window to PNG and exits, without starting the app.
 if let path = argument(after: "--onboarding-snapshot") {
     _ = NSApplication.shared
     let plan = OnboardingPlan(settingsPath: "~/.claude/settings.json",
@@ -53,6 +53,7 @@ if let path = argument(after: "--onboarding-snapshot") {
                                     "`~/.claude/settings.json` is not valid JSON (line 12): nothing was changed."))
     default: phase = .idle
     }
+    onboarding.heightLimit = argument(after: "--max-height").flatMap(Double.init).map { CGFloat($0) }
     onboarding.preview(phase, readQuotas: arguments.contains("--checked"), launchAtLogin: !arguments.contains("--no-login"))
     onboarding.snapshot(to: path)
     exit(0)

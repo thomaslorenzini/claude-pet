@@ -117,21 +117,28 @@ final class OnboardingWindowController: NSObject {
         syncAnimation()
     }
 
-    /// Keeps the top edge in place when the error banner changes the height.
+    /// Tests: pretends the screen leaves this much height (`--max-height`).
+    var heightLimit: CGFloat?
+
+    /// Keeps the top edge in place when the error banner changes the height, and the whole window on screen.
     private func resize(center: Bool) {
+        let visible = (window.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let margin: CGFloat = 12
+        view.availableHeight = heightLimit ?? visible.height - 2 * margin
         let size = NSSize(width: OnboardingView.width, height: view.preferredHeight)
         var frame = window.frame
         if center || frame.width == 0 {
-            let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
             // A little above center, like system alerts.
             frame = CGRect(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2 + visible.height * 0.06,
                            width: size.width, height: size.height)
-            frame.origin.y = min(frame.origin.y, visible.maxY - size.height)
         } else {
             guard abs(frame.height - size.height) > 0.5 else { return }
             frame.origin.y += frame.height - size.height
             frame.size = size
         }
+        // Top first: if it still cannot fit, the title stays visible and Return still accepts.
+        frame.origin.y = max(frame.origin.y, visible.minY + margin)
+        frame.origin.y = min(frame.origin.y, visible.maxY - margin - size.height)
         window.setFrame(frame, display: window.isVisible)
         view.frame = CGRect(origin: .zero, size: size)
         window.invalidateShadow()
@@ -212,8 +219,33 @@ final class OnboardingPanel: NSWindow {
 final class OnboardingView: NSView {
     static let width: CGFloat = 560
     private static let pad: CGFloat = 24
-    private static let headerHeight: CGFloat = 128
-    private static let spriteScale: CGFloat = 4
+
+    /// How tightly the window is packed. It must fit the screen, buttons included: a screen of 900 pt with
+    /// the Dock leaves about 800, and the regular layout is taller.
+    private struct Density {
+        var header: CGFloat = 128
+        var spriteScale: CGFloat = 4
+        var kicker = true
+        var sectionGap: CGFloat = 24
+        var itemGap: CGFloat = 11
+        /// Last resort: the list keeps its titles, the checkboxes keep their text (they ask for consent).
+        var bodies = true
+        var optionPad: CGFloat = 14
+
+        static let regular = Density()
+        static let compact = Density(header: 96, spriteScale: 3, kicker: false, sectionGap: 16, itemGap: 6, optionPad: 10)
+        static let minimal = Density(header: 96, spriteScale: 3, kicker: false, sectionGap: 16, itemGap: 9, bodies: false, optionPad: 10)
+    }
+
+    /// Set by the controller from the screen; the densest layout that fits wins.
+    var availableHeight = CGFloat.greatestFiniteMagnitude {
+        didSet { if oldValue != availableHeight { needsDisplay = true; window?.invalidateCursorRects(for: self) } }
+    }
+
+    private var density: Density {
+        let theme = PanelTheme.current(effectiveAppearance)
+        return [Density.regular, .compact].first { layout(theme, $0).height <= availableHeight } ?? .minimal
+    }
 
     var canvas = PixelCanvas() { didSet { setNeedsDisplay(spriteRect.insetBy(dx: -4, dy: -4)) } }
     var phase = OnboardingWindowController.Phase.idle { didSet { needsDisplay = true; window?.invalidateCursorRects(for: self) } }
@@ -340,32 +372,34 @@ final class OnboardingView: NSView {
     private var textX: CGFloat { Self.pad + 30 + 14 }
     private var textWidth: CGFloat { Self.width - textX - Self.pad }
 
-    private func layout(_ theme: PanelTheme) -> Layout {
+    private func layout(_ theme: PanelTheme) -> Layout { layout(theme, density) }
+
+    private func layout(_ theme: PanelTheme, _ d: Density) -> Layout {
         var l = Layout()
         let pad = Self.pad
-        var y = pad + Self.headerHeight + 24
+        var y = pad + d.header + d.sectionGap
         l.sectionY = y
         y += 26
         for item in items {
-            let body = rich(item.body, size: 12, theme.secondary, theme: theme)
-            let h = height(of: body, width: textWidth)
+            let h = d.bodies ? height(of: rich(item.body, size: 12, theme.secondary, theme: theme), width: textWidth) : 0
             l.items.append((icon: CGRect(x: pad, y: y, width: 30, height: 30),
-                            title: CGPoint(x: textX, y: y - 1),
+                            // Alone, the title sits level with its icon.
+                            title: CGPoint(x: textX, y: h > 0 ? y - 1 : y + 6),
                             body: CGRect(x: textX, y: y + 18, width: textWidth, height: h)))
-            y += max(30, 18 + h) + 11
+            y += max(30, 18 + h) + d.itemGap
         }
         y += 3
         let optionTextWidth = Self.width - 2 * pad - 14 - 20 - 12 - 14
         for option in options {
             let bodyHeight = height(of: rich(option.body, size: 11.5, theme.tertiary, theme: theme), width: optionTextWidth)
-            let optionHeight = 14 + 18 + bodyHeight + 14
-            let checkbox = CGRect(x: pad + 14, y: y + 14, width: 20, height: 20)
+            let optionHeight = d.optionPad + 18 + bodyHeight + d.optionPad
+            let checkbox = CGRect(x: pad + 14, y: y + d.optionPad, width: 20, height: 20)
             l.options.append((card: CGRect(x: pad, y: y, width: Self.width - 2 * pad, height: optionHeight),
                               checkbox: checkbox,
-                              text: CGRect(x: checkbox.maxX + 12, y: y + 14, width: optionTextWidth, height: 18 + bodyHeight)))
+                              text: CGRect(x: checkbox.maxX + 12, y: y + d.optionPad, width: optionTextWidth, height: 18 + bodyHeight)))
             y += optionHeight + 8
         }
-        y += 10
+        y += d.optionPad - 4
 
         if case .error(let message) = phase {
             let text = rich(message, size: 12, theme.text, theme: theme)
@@ -386,9 +420,10 @@ final class OnboardingView: NSView {
     var preferredHeight: CGFloat { ceil(layout(PanelTheme.current(effectiveAppearance)).height) }
 
     private var spriteRect: CGRect {
-        let size = CGSize(width: CGFloat(PixelCanvas.standardWidth) * Self.spriteScale,
-                          height: CGFloat(PixelCanvas.standardHeight) * Self.spriteScale)
-        return CGRect(x: Self.pad + 14, y: Self.pad + (Self.headerHeight - size.height) / 2 + 2, width: size.width, height: size.height)
+        let d = density
+        let size = CGSize(width: CGFloat(PixelCanvas.standardWidth) * d.spriteScale,
+                          height: CGFloat(PixelCanvas.standardHeight) * d.spriteScale)
+        return CGRect(x: Self.pad + 14, y: Self.pad + (d.header - size.height) / 2 + 2, width: size.width, height: size.height)
     }
 
     private func buttonWidth(_ title: String, shortcut: String) -> CGFloat {
@@ -419,8 +454,10 @@ final class OnboardingView: NSView {
             drawIconTile(item.icon, in: frame.icon, theme: theme)
             attributed(item.title, .systemFont(ofSize: 13, weight: .semibold), theme.text)
                 .draw(at: frame.title)
-            rich(item.body, size: 12, theme.secondary, theme: theme)
-                .draw(with: frame.body, options: [.usesLineFragmentOrigin])
+            if frame.body.height > 0 {
+                rich(item.body, size: 12, theme.secondary, theme: theme)
+                    .draw(with: frame.body, options: [.usesLineFragmentOrigin])
+            }
         }
 
         for (option, frame) in zip(options, l.options) { drawOption(option, frame, theme: theme) }
@@ -430,7 +467,8 @@ final class OnboardingView: NSView {
 
     private func drawHeader(_ theme: PanelTheme) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        let card = CGRect(x: Self.pad, y: Self.pad, width: Self.width - 2 * Self.pad, height: Self.headerHeight)
+        let d = density
+        let card = CGRect(x: Self.pad, y: Self.pad, width: Self.width - 2 * Self.pad, height: d.header)
         let shape = NSBezierPath(roundedRect: card, xRadius: 13, yRadius: 13)
         theme.card.setFill()
         shape.fill()
@@ -472,13 +510,16 @@ final class OnboardingView: NSView {
                                      "To follow Claude, the pet needs to change a few settings. Here is exactly which. Nothing is written until you accept."),
                                   .systemFont(ofSize: 12.5), theme.secondary, wraps: true, lineSpacing: 2)
         let subtitleHeight = height(of: subtitle, width: width)
-        let block = 14 + 6 + title.size().height + 5 + subtitleHeight
+        let kickerHeight: CGFloat = d.kicker ? 14 + 6 : 0
+        let block = kickerHeight + title.size().height + 5 + subtitleHeight
         var y = card.minY + (card.height - block) / 2
-        let dot = CGRect(x: x, y: y + 4, width: 6, height: 6)
-        theme.accent.setFill()
-        NSBezierPath(ovalIn: dot).fill()
-        kicker.draw(at: CGPoint(x: dot.maxX + 6, y: y))
-        y += 14 + 6
+        if d.kicker {
+            let dot = CGRect(x: x, y: y + 4, width: 6, height: 6)
+            theme.accent.setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            kicker.draw(at: CGPoint(x: dot.maxX + 6, y: y))
+        }
+        y += kickerHeight
         title.draw(at: CGPoint(x: x - 1, y: y))
         y += title.size().height + 5
         subtitle.draw(with: CGRect(x: x, y: y, width: width, height: subtitleHeight), options: [.usesLineFragmentOrigin])
