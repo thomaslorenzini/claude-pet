@@ -16,8 +16,8 @@ final class OnboardingWindowController: NSObject {
         case idle, installing, error(String), success
     }
 
-    /// Runs the installation; `readQuotas` is the checkbox. Return nil on success, or an error message to show.
-    var onAccept: ((_ readQuotas: Bool) -> String?)?
+    /// Runs the installation with the two checkboxes. Return nil on success, or an error message to show.
+    var onAccept: ((_ readQuotas: Bool, _ launchAtLogin: Bool) -> String?)?
     var onRefuse: (() -> Void)?
 
     let window = OnboardingPanel()
@@ -75,8 +75,9 @@ final class OnboardingWindowController: NSObject {
     }
 
     /// Tests: puts the window in a given state without running anything.
-    func preview(_ phase: Phase, readQuotas: Bool = false) {
+    func preview(_ phase: Phase, readQuotas: Bool = false, launchAtLogin: Bool = true) {
         view.readQuotas = readQuotas
+        view.launchAtLogin = launchAtLogin
         setPhase(phase)
     }
 
@@ -90,10 +91,10 @@ final class OnboardingWindowController: NSObject {
         setPhase(.installing)
         // Draw "installing" before the (synchronous) installation blocks the main thread.
         view.display()
-        let readQuotas = view.readQuotas
+        let readQuotas = view.readQuotas, launchAtLogin = view.launchAtLogin
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self else { return }
-            let error = self.onAccept?(readQuotas) ?? nil
+            let error = self.onAccept?(readQuotas, launchAtLogin) ?? nil
             if let error {
                 self.setPhase(.error(error))
             } else if self.view.phase == .installing {
@@ -217,6 +218,8 @@ final class OnboardingView: NSView {
     var canvas = PixelCanvas() { didSet { setNeedsDisplay(spriteRect.insetBy(dx: -4, dy: -4)) } }
     var phase = OnboardingWindowController.Phase.idle { didSet { needsDisplay = true; window?.invalidateCursorRects(for: self) } }
     var readQuotas = false { didSet { needsDisplay = true } }
+    /// Suggested, so checked by default: closed after a restart, the pet would miss everything without a word.
+    var launchAtLogin = true { didSet { needsDisplay = true } }
     var onAccept: (() -> Void)?
     var onRefuse: (() -> Void)?
 
@@ -224,7 +227,7 @@ final class OnboardingView: NSView {
     private var hovered: Control? { didSet { if oldValue != hovered { needsDisplay = true } } }
     private var pressed: Control? { didSet { if oldValue != pressed { needsDisplay = true } } }
 
-    private enum Control { case accept, refuse, option }
+    private enum Control { case accept, refuse, login, quotas }
 
     init(plan: OnboardingPlan) {
         self.plan = plan
@@ -282,8 +285,32 @@ final class OnboardingView: NSView {
         ]
     }
 
-    private var optionTitle: String { tr("Lire les quotas avec le compte Claude Code", "Read quotas with the Claude Code account") }
-    private var optionBody: String {
+    private struct Option {
+        let control: Control
+        let title: String
+        let tag: String
+        let body: String
+    }
+
+    private var options: [Option] {
+        [Option(control: .login,
+                title: tr("Ouvrir au démarrage du Mac", "Open at login"),
+                tag: tr("conseillé", "recommended"),
+                body: tr("Sinon, après un redémarrage, le pet ne voit plus rien jusqu'à ce que tu l'ouvres.",
+                         "Otherwise, after a restart, the pet sees nothing until you open it.")),
+         Option(control: .quotas,
+                title: tr("Lire les quotas avec le compte Claude Code", "Read quotas with the Claude Code account"),
+                tag: tr("facultatif", "optional"),
+                body: quotasBody)]
+    }
+
+    private func isOn(_ control: Control) -> Bool { control == .login ? launchAtLogin : readQuotas }
+
+    private func flip(_ control: Control) {
+        if control == .login { launchAtLogin.toggle() } else if control == .quotas { readQuotas.toggle() }
+    }
+
+    private var quotasBody: String {
         tr("Le pet lit le jeton de Claude Code dans le Trousseau (macOS te demandera l'accès) pour demander ton utilisation à `api.anthropic.com`, toutes les 5 min. Le jeton reste en mémoire, jamais écrit. S'il a expiré, le pet lance `claude` en arrière-plan pour qu'il le renouvelle, sans consommer de quota.",
            "The pet reads Claude Code's token from the Keychain (macOS will ask for access) to fetch your usage from `api.anthropic.com`, every 5 min. The token stays in memory, never written. If it has expired, the pet runs `claude` in the background to renew it, without using any quota.")
     }
@@ -302,9 +329,7 @@ final class OnboardingView: NSView {
     private struct Layout {
         var items: [(icon: CGRect, title: CGPoint, body: CGRect)] = []
         var sectionY: CGFloat = 0
-        var option = CGRect.zero
-        var checkbox = CGRect.zero
-        var optionText = CGRect.zero
+        var options: [(card: CGRect, checkbox: CGRect, text: CGRect)] = []
         var banner: CGRect?
         var accept = CGRect.zero
         var refuse = CGRect.zero
@@ -327,16 +352,20 @@ final class OnboardingView: NSView {
             l.items.append((icon: CGRect(x: pad, y: y, width: 30, height: 30),
                             title: CGPoint(x: textX, y: y - 1),
                             body: CGRect(x: textX, y: y + 18, width: textWidth, height: h)))
-            y += max(30, 18 + h) + 13
+            y += max(30, 18 + h) + 11
         }
         y += 3
         let optionTextWidth = Self.width - 2 * pad - 14 - 20 - 12 - 14
-        let optionBodyHeight = height(of: rich(optionBody, size: 11.5, theme.tertiary, theme: theme), width: optionTextWidth)
-        let optionHeight = 14 + 18 + optionBodyHeight + 14
-        l.option = CGRect(x: pad, y: y, width: Self.width - 2 * pad, height: optionHeight)
-        l.checkbox = CGRect(x: pad + 14, y: y + 14, width: 20, height: 20)
-        l.optionText = CGRect(x: l.checkbox.maxX + 12, y: y + 14, width: optionTextWidth, height: 18 + optionBodyHeight)
-        y += optionHeight + 18
+        for option in options {
+            let bodyHeight = height(of: rich(option.body, size: 11.5, theme.tertiary, theme: theme), width: optionTextWidth)
+            let optionHeight = 14 + 18 + bodyHeight + 14
+            let checkbox = CGRect(x: pad + 14, y: y + 14, width: 20, height: 20)
+            l.options.append((card: CGRect(x: pad, y: y, width: Self.width - 2 * pad, height: optionHeight),
+                              checkbox: checkbox,
+                              text: CGRect(x: checkbox.maxX + 12, y: y + 14, width: optionTextWidth, height: 18 + bodyHeight)))
+            y += optionHeight + 8
+        }
+        y += 10
 
         if case .error(let message) = phase {
             let text = rich(message, size: 12, theme.text, theme: theme)
@@ -394,7 +423,7 @@ final class OnboardingView: NSView {
                 .draw(with: frame.body, options: [.usesLineFragmentOrigin])
         }
 
-        drawOption(l, theme: theme)
+        for (option, frame) in zip(options, l.options) { drawOption(option, frame, theme: theme) }
         if let banner = l.banner, case .error(let message) = phase { drawBanner(message, in: banner, theme: theme) }
         drawFooter(l, theme: theme)
     }
@@ -469,12 +498,12 @@ final class OnboardingView: NSView {
         }
     }
 
-    private func drawOption(_ l: Layout, theme: PanelTheme) {
+    private func drawOption(_ option: Option, _ l: (card: CGRect, checkbox: CGRect, text: CGRect), theme: PanelTheme) {
         let enabled = phase == .idle || isError
-        let card = NSBezierPath(roundedRect: l.option, xRadius: 11, yRadius: 11)
+        let card = NSBezierPath(roundedRect: l.card, xRadius: 11, yRadius: 11)
         theme.card.setFill()
         card.fill()
-        if hovered == .option, enabled {
+        if hovered == option.control, enabled {
             theme.text.withAlphaComponent(0.035).setFill()
             card.fill()
         }
@@ -482,7 +511,7 @@ final class OnboardingView: NSView {
 
         // Checkbox: an outlined square that fills with the accent, and a hand-drawn tick.
         let box = NSBezierPath(roundedRect: l.checkbox.insetBy(dx: 0.75, dy: 0.75), xRadius: 5, yRadius: 5)
-        if readQuotas {
+        if isOn(option.control) {
             theme.accent.withAlphaComponent(alpha).setFill()
             box.fill()
             let tick = NSBezierPath()
@@ -498,21 +527,21 @@ final class OnboardingView: NSView {
         } else {
             theme.background.withAlphaComponent(alpha).setFill()
             box.fill()
-            (pressed == .option ? theme.accent : theme.tertiary.withAlphaComponent(0.7 * alpha)).setStroke()
+            (pressed == option.control ? theme.accent : theme.tertiary.withAlphaComponent(0.7 * alpha)).setStroke()
             box.lineWidth = 1.5
             box.stroke()
         }
 
-        let title = attributed(optionTitle, .systemFont(ofSize: 13, weight: .semibold), theme.text.withAlphaComponent(alpha))
-        title.draw(at: CGPoint(x: l.optionText.minX, y: l.optionText.minY + 1))
-        let tag = attributed(tr("facultatif", "optional"), .systemFont(ofSize: 10.5, weight: .medium), theme.tertiary)
-        let tagX = l.optionText.minX + title.size().width + 8
-        let tagRect = CGRect(x: tagX, y: l.optionText.minY + 1.5, width: tag.size().width + 12, height: 16)
+        let title = attributed(option.title, .systemFont(ofSize: 13, weight: .semibold), theme.text.withAlphaComponent(alpha))
+        title.draw(at: CGPoint(x: l.text.minX, y: l.text.minY + 1))
+        let tag = attributed(option.tag, .systemFont(ofSize: 10.5, weight: .medium), theme.tertiary)
+        let tagX = l.text.minX + title.size().width + 8
+        let tagRect = CGRect(x: tagX, y: l.text.minY + 1.5, width: tag.size().width + 12, height: 16)
         theme.track.setFill()
         NSBezierPath(roundedRect: tagRect, xRadius: 8, yRadius: 8).fill()
         tag.draw(at: CGPoint(x: tagRect.minX + 6, y: tagRect.minY + (16 - tag.size().height) / 2))
-        rich(optionBody, size: 11.5, theme.tertiary, theme: theme)
-            .draw(with: CGRect(x: l.optionText.minX, y: l.optionText.minY + 20, width: l.optionText.width, height: l.optionText.height - 18),
+        rich(option.body, size: 11.5, theme.tertiary, theme: theme)
+            .draw(with: CGRect(x: l.text.minX, y: l.text.minY + 20, width: l.text.width, height: l.text.height - 18),
                   options: [.usesLineFragmentOrigin])
     }
 
@@ -640,7 +669,7 @@ final class OnboardingView: NSView {
         }
         if l.accept.contains(point) { return .accept }
         if l.refuse.contains(point) { return .refuse }
-        if l.option.contains(point) { return .option }
+        if let i = l.options.firstIndex(where: { $0.card.contains(point) }) { return options[i].control }
         return nil
     }
 
@@ -652,7 +681,7 @@ final class OnboardingView: NSView {
     override func resetCursorRects() {
         guard phase == .idle || isError else { return }
         let l = layout(PanelTheme.current(effectiveAppearance))
-        [l.accept, l.refuse, l.option].forEach { addCursorRect($0, cursor: .pointingHand) }
+        ([l.accept, l.refuse] + l.options.map(\.card)).forEach { addCursorRect($0, cursor: .pointingHand) }
     }
 
     override func mouseMoved(with event: NSEvent) { hovered = control(at: convert(event.locationInWindow, from: nil)) }
@@ -675,13 +704,17 @@ final class OnboardingView: NSView {
         switch target {
         case .accept: onAccept?()
         case .refuse: onRefuse?()
-        case .option: readQuotas.toggle()
+        case .login, .quotas: flip(target)
         }
     }
 
     override func keyDown(with event: NSEvent) {
-        // Space flips the option, as it would a focused checkbox.
-        if event.charactersIgnoringModifiers == " ", phase == .idle || isError { readQuotas.toggle() } else { super.keyDown(with: event) }
+        // Space flips the option under the cursor, as it would a focused checkbox.
+        if event.charactersIgnoringModifiers == " ", phase == .idle || isError, let hovered, hovered == .login || hovered == .quotas {
+            flip(hovered)
+        } else {
+            super.keyDown(with: event)
+        }
     }
 
     // MARK: Text helpers

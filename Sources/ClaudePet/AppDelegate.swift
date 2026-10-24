@@ -55,13 +55,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = OnboardingWindowController(plan: OnboardingPlan(
             settingsPath: path, existingStatusLine: setup.existingStatusLine(), hookCount: HookSetup.expectedHooks
         ))
-        controller.onAccept = { [unowned self, unowned controller] readQuotas in
+        controller.onAccept = { [unowned self, unowned controller] readQuotas, launchAtLogin in
             do {
                 try setup.install()
             } catch {
                 return error.localizedDescription
             }
             OAuthUsageSource.isEnabled = readQuotas
+            // Not worth failing the installation over: the settings show the real state and can retry.
+            if launchAtLogin { LoginItem.set(true) }
             // A fresh install lives in the notch when there is one: start() then docks the pet directly.
             if NotchGeometry.find() != nil { UserDefaults.standard.set(true, forKey: PetController.notchKey) }
             UserDefaults.standard.set(true, forKey: Self.setupAcceptedKey)
@@ -239,6 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot["usage_api"] = self.usageAPI.status
             snapshot["usage_token_expires_at"] = self.usageAPI.tokenExpiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
             snapshot["notch"] = self.pet.mode != .floating
+            snapshot["login_item"] = LoginItem.state.rawValue
             snapshot["click_through"] = self.pet.panel.ignoresMouseEvents
             snapshot["requests"] = self.requests.queue.map { ["id": $0.id, "session": $0.session, "tool": $0.tool] }
             snapshot["notch_radius"] = Double(NotchGeometry.bottomRadius)
@@ -407,6 +410,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hookBackups = (original, latest.flatMap { $0.url == original?.url ? nil : $0 })
     }
 
+    /// The last failure of the login item toggle, shown under it until the next try.
+    private var loginMessage: String?
+
     private func setUpSettings() {
         settings.modelProvider = { [unowned self] in self.settingsModel() }
         settings.onActivate = { [unowned self] in self.reloadHooks() }
@@ -416,6 +422,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         view.onToggleUsageAPI = { [unowned self] in
             OAuthUsageSource.isEnabled.toggle()
             OAuthUsageSource.isEnabled ? self.usageAPI.start() : self.usageAPI.stop()
+            self.settings.refresh()
+        }
+        view.onToggleLogin = { [unowned self] in
+            self.loginMessage = LoginItem.set(LoginItem.state != .on)
             self.settings.refresh()
         }
         view.onScale = { [unowned self] in
@@ -474,6 +484,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let free = CGSize(width: max(1, area.width - frame.width), height: max(1, area.height - frame.height))
             m.spot = CGPoint(x: (frame.minX - area.minX) / free.width, y: (frame.minY - area.minY) / free.height)
         }
+        m.login = LoginItem.state
+        m.loginMessage = loginMessage
         m.usageAPI = OAuthUsageSource.isEnabled
         m.usageStatus = usageLine()
         m.usageHealthy = OAuthUsageSource.isEnabled ? usageAPI.isUpToDate : nil

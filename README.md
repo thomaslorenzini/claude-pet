@@ -11,7 +11,7 @@ Claude Code ──hook──▶ curl POST 127.0.0.1:47319/event ──▶ Claude
 
 Ouvre `ClaudePet.dmg` et glisse **Claude Pet** dans Applications, puis lance-le depuis Applications. Au premier
 lancement, un écran détaille tout ce qui va être installé (les hooks dans `~/.claude/settings.json`, le relais de la
-ligne de statut, quelques fichiers dans `~/Library/Application Support/claude-pet/`). **Accepter** installe tout et
+ligne de statut, quelques fichiers dans `~/Library/Application Support/claude-pet/`). Une case, cochée par défaut, ouvre aussi le pet au démarrage du Mac. **Accepter** installe tout et
 démarre le pet, directement dans l'encoche si ton Mac en a une ; **Refuser** ferme l'app sans rien écrire, et l'écran reviendra au prochain lancement. Avant toute
 écriture, `settings.json` est copié : la copie d'origine (avant Claude Pet) et celle d'avant la dernière
 modification peuvent être remises depuis Réglages › Claude Code.
@@ -31,7 +31,7 @@ scripts/make-dmg.sh          # construit build/ClaudePet.dmg
 Le pet apparaît en bas à droite, et sa silhouette dans la barre des menus. Un clic sur celle-ci ouvre un panneau :
 le pet animé et ce que fait Claude, les trois jauges d'utilisation, deux réglages rapides (**Afficher le pet**,
 **Vivre dans l'encoche**), l'état du serveur, **Réglages…** (⌘,) et **Quitter** (⌘Q). Échap ou un clic ailleurs le referme. La fenêtre de réglages regroupe : afficher le pet, l'encoche,
-la taille, le coin de l'écran, les quotas du compte, l'état des hooks (réparer, réinstaller, désinstaller) et la
+la taille, le coin de l'écran, l'ouverture au démarrage du Mac, les quotas du compte, l'état des hooks (réparer, réinstaller, désinstaller) et la
 restauration des copies de `settings.json`. Glisse le pet à la souris : sa position est mémorisée. Un clic droit sur
 le pet ouvre un menu avec les réglages essentiels.
 L'interface est en français si macOS est en français, en anglais sinon (la langue choisie pour Claude Pet

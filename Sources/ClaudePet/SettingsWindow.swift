@@ -107,6 +107,8 @@ final class SettingsView: NSView {
         var notchAvailable = false
         var transitioning = false
         var scale = 5
+        var login = LoginItem.State.off
+        var loginMessage: String?
         /// Where the pet sits on its screen, 0…1 from the bottom-left corner; nil when unknown.
         var spot: CGPoint?
         var usageAPI = true
@@ -134,6 +136,7 @@ final class SettingsView: NSView {
     var model = Model() { didSet { apply() } }
     var onToggleVisible: (() -> Void)?
     var onToggleNotch: (() -> Void)?
+    var onToggleLogin: (() -> Void)?
     var onToggleUsageAPI: (() -> Void)?
     var onScale: ((Int) -> Void)?
     var onCorner: ((PetController.Corner) -> Void)?
@@ -145,12 +148,13 @@ final class SettingsView: NSView {
     private let notchRow = SettingRow(accessory: PanelToggle())
     private let sizeRow = SettingRow(accessory: SizePicker())
     private let positionRow = SettingRow(accessory: CornerPicker())
+    private let loginRow = SettingRow(accessory: PanelToggle())
     private let usageRow = SettingRow(accessory: PanelToggle())
     private let installButton = PanelPillButton(title: "", style: .primary)
     private let uninstallButton = PanelPillButton(title: "", style: .secondary)
     private let restoreOriginalButton = PanelPillButton(title: "", style: .secondary)
     private let restoreLatestButton = PanelPillButton(title: "", style: .secondary)
-    private var petRows: [SettingRow] { [visibleRow, notchRow, sizeRow, positionRow] }
+    private var petRows: [SettingRow] { [visibleRow, notchRow, sizeRow, positionRow, loginRow] }
     private let petIcon = SpriteComposer.frame(state: .idle, tool: nil, t: 0, bubble: false)
 
     /// Destructive actions ask twice: the first click arms them for a few seconds, one at a time.
@@ -165,6 +169,7 @@ final class SettingsView: NSView {
         [installButton, uninstallButton, restoreOriginalButton, restoreLatestButton].forEach(addSubview)
         visibleRow.onClick = { [weak self] in self?.onToggleVisible?() }
         notchRow.onClick = { [weak self] in self?.onToggleNotch?() }
+        loginRow.onClick = { [weak self] in self?.onToggleLogin?() }
         usageRow.onClick = { [weak self] in self?.onToggleUsageAPI?() }
         (sizeRow.accessory as! SizePicker).onPick = { [weak self] in self?.onScale?($0) }
         (positionRow.accessory as! CornerPicker).onPick = { [weak self] in self?.onCorner?($0) }
@@ -295,6 +300,21 @@ final class SettingsView: NSView {
         corners.docked = m.notch
         corners.isEnabled = !m.notch && !m.transitioning
 
+        loginRow.title = tr("Ouvrir au démarrage du Mac", "Open at login")
+        if let message = m.loginMessage {
+            loginRow.subtitle = tr("Échec : ", "Failed: ") + message
+        } else {
+            switch m.login {
+            case .on: loginRow.subtitle = tr("Le pet s'ouvre avec ta session", "The pet opens with your session")
+            case .off: loginRow.subtitle = tr("À ouvrir à la main après un redémarrage", "Open it by hand after a restart")
+            // Turned off by the user in System Settings: only they can allow it again, from there.
+            case .needsApproval: loginRow.subtitle = tr("À autoriser dans les Réglages Système", "Allow it in System Settings")
+            case .unavailable: loginRow.subtitle = tr("Seulement pour l'app installée", "Only for the installed app")
+            }
+        }
+        loginRow.isEnabled = m.login != .unavailable
+        (loginRow.accessory as! PanelToggle).isOn = m.login == .on
+
         usageRow.title = tr("Quotas du compte", "Account quotas")
         usageRow.subtitle = tr("Lus via Claude Code, toutes les 5 min · accès au Trousseau", "Read through Claude Code, every 5 min · Keychain access")
         (usageRow.accessory as! PanelToggle).isOn = m.usageAPI
@@ -381,6 +401,7 @@ final class SettingsView: NSView {
         case "visible": onToggleVisible?()
         case "notch": if notchRow.isEnabled { onToggleNotch?() }
         case "usage": onToggleUsageAPI?()
+        case "login": if loginRow.isEnabled { onToggleLogin?() }
         case "reinstall", "install": installButton.press()
         // First click arms the confirmation, a second one (or "confirm_uninstall") goes through.
         case "uninstall": uninstallButton.press()
