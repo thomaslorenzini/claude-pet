@@ -37,6 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Nothing runs (no server, no pet, no icon) before the user has accepted the installation.
         if UserDefaults.standard.bool(forKey: Self.setupAcceptedKey) {
             start()
+            // After the pet shows up. Not after the onboarding, which has just installed this version's hooks.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.checkHookUpdate() }
         } else {
             showOnboarding()
         }
@@ -80,6 +82,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.onRefuse = { NSApp.terminate(nil) }
         onboarding = controller
         controller.show()
+    }
+
+    // MARK: Hook update
+
+    /// The app version whose hook update the user put off ("Later"): asked again with the next one.
+    static let hookUpdateDismissedKey = "hookUpdateDismissedVersion"
+    private var hookUpdate: HookUpdateController?
+    /// Outcome of the last check, for GET /state while no prompt is open.
+    private var hookUpdateState = "not_checked"
+
+    /// CFBundleVersion is the commit count, which always grows: a new version is always a new key.
+    private static var appBuild: String {
+        let info = Bundle.main.infoDictionary
+        return info?["CFBundleVersion"] as? String ?? info?["CFBundleShortVersionString"] as? String ?? "dev"
+    }
+
+    private static var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+    }
+
+    /// Hooks written by another version are offered an update, never rewritten silently. Nothing when
+    /// they were never installed or were uninstalled: that is the user's choice. `force` ignores Later.
+    private func checkHookUpdate(force: Bool = false) {
+        guard hookUpdate == nil else { return }
+        let setup = HookSetup.standard
+        guard let changes = setup.pendingChanges() else {
+            hookUpdateState = "not_installed"
+            return
+        }
+        guard !changes.isEmpty else {
+            hookUpdateState = "up_to_date"
+            return
+        }
+        if !force, UserDefaults.standard.string(forKey: Self.hookUpdateDismissedKey) == Self.appBuild {
+            hookUpdateState = "dismissed"
+            return
+        }
+        let controller = HookUpdateController(changes: changes, version: Self.appVersion,
+                                              settingsPath: (setup.settingsURL.path as NSString).abbreviatingWithTildeInPath)
+        controller.onUpdate = { [unowned self] in
+            let report = try setup.install()
+            self.hookUpdateState = "updated"
+            self.hookMessage = nil
+            self.reloadHooks()
+            self.settings.refresh()
+            return report.changed ? tr("Hooks à jour", "Hooks up to date") + Self.backupNote(report)
+                                  : tr("Déjà à jour : rien n'a changé", "Already up to date: nothing changed")
+        }
+        controller.onLater = { [unowned self] in
+            UserDefaults.standard.set(Self.appBuild, forKey: Self.hookUpdateDismissedKey)
+            self.hookUpdateState = "dismissed"
+        }
+        controller.onFinish = { [unowned self, weak controller] in
+            if self.hookUpdate === controller { self.hookUpdate = nil }
+            // Closed by the app without an answer (a test): asked again at the next launch.
+            if self.hookUpdateState == "open" { self.hookUpdateState = "closed" }
+        }
+        hookUpdate = controller
+        hookUpdateState = "open"
+        controller.show()
+    }
+
+    /// The settings' buttons may make the prompt moot, or change what it lists.
+    private func refreshHookUpdate() {
+        guard let prompt = hookUpdate, prompt.phase == .idle else { return }
+        if let changes = HookSetup.standard.pendingChanges(), !changes.isEmpty {
+            prompt.update(changes: changes)
+        } else {
+            hookUpdateState = "up_to_date"
+            prompt.dismiss()
+        }
     }
 
     // MARK: First-run tutorial
@@ -258,6 +331,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if button == "confused" { self.tutorial?.confused() }
             }
             if let path = control["tutorial_snapshot"] as? String { self.tutorial?.snapshot(to: path) }
+            // Tests: the hook update prompt. "hook_update_check" is the launch check (Later counts),
+            // "hook_update" true opens it whatever Later said, false closes it without counting as Later.
+            if control["hook_update_check"] as? Bool == true { self.checkHookUpdate() }
+            if let open = control["hook_update"] as? Bool { open ? self.checkHookUpdate(force: true) : self.hookUpdate?.dismiss() }
+            if let look = control["hook_update_appearance"] as? String, let prompt = self.hookUpdate {
+                prompt.window.appearance = look.isEmpty ? nil : NSAppearance(named: look == "dark" ? .darkAqua : .aqua)
+                Self.redraw(prompt.window.contentView!)
+            }
+            if let name = control["hook_update_press"] as? String { self.hookUpdate?.press(name) }
+            if let path = control["hook_update_snapshot"] as? String { self.hookUpdate?.snapshot(to: path) }
         }
         server.stateProvider = { [unowned self] in
             var snapshot = self.tracker.snapshot()
@@ -280,6 +363,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot["update_last_check"] = self.updates.lastCheck.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
             snapshot["update_automatic"] = self.updates.isAutomatic
             snapshot["update_error"] = self.updates.lastError ?? NSNull()
+            let setup = HookSetup.standard, hooks = setup.status()
+            snapshot["hooks_installed"] = hooks.installedHooks
+            snapshot["hooks_up_to_date"] = hooks.upToDate
+            snapshot["hook_update"] = self.hookUpdate?.stateName ?? self.hookUpdateState
+            snapshot["hook_update_changes"] = setup.pendingChanges()?.map { ["kind": $0.kind.rawValue, "target": $0.target, "fields": $0.fields] } ?? NSNull()
+            snapshot["hook_update_dismissed"] = UserDefaults.standard.string(forKey: Self.hookUpdateDismissedKey) ?? NSNull()
             return snapshot
         }
         server.onStatusChange = { [unowned self] status in
@@ -514,6 +603,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         reloadHooks()
         settings.refresh()
+        refreshHookUpdate()
     }
 
     private func settingsModel() -> SettingsView.Model {

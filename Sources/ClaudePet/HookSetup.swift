@@ -137,6 +137,109 @@ struct HookSetup {
         )
     }
 
+    /// One difference between our entries in settings.json and what this version's install writes.
+    struct Change: Equatable {
+        enum Kind: String { case added, removed, modified }
+        let kind: Kind
+        /// The hook's event, or `statusLine` / `bridge` for the status line command and its script.
+        let target: String
+        /// As in the file today / as an install would write it: one line per field, then the command.
+        let old: String?
+        let new: String?
+        /// For a modified hook: which of "command", "timeout", "matcher", "count", "other" differ.
+        let fields: [String]
+
+        static let statusLine = "statusLine", bridge = "bridge"
+    }
+
+    /// What an install would change in our own entries: nil when they were never installed (or were
+    /// uninstalled), empty when an install would change none of them. Other apps' hooks and a mere
+    /// reordering don't count: the point is to tell an app update that brings different hooks.
+    func pendingChanges() -> [Change]? {
+        guard let settings = try? load().settings else { return nil }
+        let installed = Self.ourEntries(settings)
+        let wrapped = Self.isWrapped(settings)
+        guard !installed.isEmpty || wrapped else { return nil }
+        var fresh = JSON.object([])
+        Self.addOurs(&fresh)
+        let wanted = Self.ourEntries(fresh)
+        let current = Dictionary(installed.map { ($0.event, $0.entries) }, uniquingKeysWith: +)
+        var changes: [Change] = []
+        for (event, entries) in wanted {
+            guard let now = current[event] else {
+                changes.append(Change(kind: .added, target: event, old: nil, new: Self.describe(entries), fields: []))
+                continue
+            }
+            if now != entries {
+                changes.append(Change(kind: .modified, target: event, old: Self.describe(now), new: Self.describe(entries),
+                                      fields: Self.differingFields(now, entries)))
+            }
+        }
+        for (event, entries) in installed where !wanted.contains(where: { $0.event == event }) {
+            changes.append(Change(kind: .removed, target: event, old: Self.describe(entries), new: nil, fields: []))
+        }
+        // The status line: install wraps it again when it no longer goes through the bridge. Once wrapped
+        // (marker found), install leaves its text alone, so a different text is not a change to offer.
+        if !wrapped {
+            var line: String?
+            if case let .object(fields)? = settings["statusLine"], case let .string(command)? = JSON.object(fields)["command"] { line = command }
+            changes.append(Change(kind: .added, target: Change.statusLine, old: line, new: statusLineCommand, fields: []))
+        }
+        // The bridge script is rewritten by every install.
+        let script = try? String(contentsOf: bridgeURL, encoding: .utf8)
+        if script != Self.bridgeScript {
+            changes.append(Change(kind: script == nil ? .added : .modified, target: Change.bridge,
+                                  old: script, new: Self.bridgeScript, fields: script == nil ? [] : ["command"]))
+        }
+        return changes
+    }
+
+    private struct Entry: Equatable {
+        let matcher: JSON?
+        let hook: JSON
+    }
+
+    /// Our entries by event, in file order, with their group's matcher.
+    private static func ourEntries(_ settings: JSON) -> [(event: String, entries: [Entry])] {
+        guard case let .object(hooks)? = settings["hooks"] else { return [] }
+        var out: [(event: String, entries: [Entry])] = []
+        for (event, groups) in hooks {
+            guard case let .array(list) = groups else { continue }
+            for group in list {
+                guard case let .array(entries)? = group["hooks"] else { continue }
+                let ours = entries.filter(isOurs).map { Entry(matcher: group["matcher"], hook: $0) }
+                guard !ours.isEmpty else { continue }
+                if let i = out.firstIndex(where: { $0.event == event }) { out[i].entries += ours } else { out.append((event, ours)) }
+            }
+        }
+        return out
+    }
+
+    private static func describe(_ entries: [Entry]) -> String {
+        entries.map { entry in
+            var head: [String] = []
+            if let matcher = entry.matcher { head.append("matcher " + (matcher.stringValue ?? matcher.serialized())) }
+            if let timeout = entry.hook["timeout"] { head.append("timeout " + (timeout.stringValue ?? timeout.serialized())) }
+            let command = entry.hook["command"]?.stringValue ?? entry.hook.serialized()
+            return (head.isEmpty ? "" : head.joined(separator: " · ") + "\n") + command
+        }.joined(separator: "\n")
+    }
+
+    private static func differingFields(_ old: [Entry], _ new: [Entry]) -> [String] {
+        guard old.count == new.count else { return ["count"] }
+        var fields: [String] = []
+        func add(_ field: String) { if !fields.contains(field) { fields.append(field) } }
+        for (a, b) in zip(old, new) where a != b {
+            if a.matcher != b.matcher { add("matcher") }
+            if a.hook["command"] != b.hook["command"] { add("command") }
+            if a.hook["timeout"] != b.hook["timeout"] { add("timeout") }
+            var restA = a.hook, restB = b.hook
+            for key in ["command", "timeout"] { restA[key] = nil; restB[key] = nil }
+            if restA != restB { add("other") }
+        }
+        return fields
+    }
+
     /// The user's own status line command (the saved original once bridged), nil when there is none.
     func existingStatusLine() -> String? {
         guard let settings = try? load().settings else { return nil }
@@ -479,6 +582,13 @@ indirect enum JSON: Equatable {
             guard case var .object(fields) = self else { return }
             if let newValue { fields.set(key, newValue) } else { fields.removeAll { $0.0 == key } }
             self = .object(fields)
+        }
+    }
+
+    var stringValue: String? {
+        switch self {
+        case let .string(s), let .number(s): return s
+        default: return nil
         }
     }
 

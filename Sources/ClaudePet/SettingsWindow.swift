@@ -155,8 +155,8 @@ final class SettingsController: NSObject, NSWindowDelegate {
     }
 }
 
-/// The paper behind the transparent titlebar, over the scrolled content.
-private final class TitlebarStrip: NSView {
+/// The paper behind the transparent titlebar, over the scrolled content (settings, hook update prompt).
+final class TitlebarStrip: NSView {
     static let height: CGFloat = 28
     var scrolled = false
 
