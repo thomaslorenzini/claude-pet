@@ -343,8 +343,8 @@ final class OnboardingView: NSView {
     }
 
     private var quotasBody: String {
-        tr("Le pet lit le jeton de Claude Code dans le Trousseau (macOS te demandera l'accès) pour demander ton utilisation à `api.anthropic.com`, toutes les 5 min. Le jeton reste en mémoire, jamais écrit. S'il a expiré, le pet lance `claude` en arrière-plan pour qu'il le renouvelle, sans consommer de quota.",
-           "The pet reads Claude Code's token from the Keychain (macOS will ask for access) to fetch your usage from `api.anthropic.com`, every 5 min. The token stays in memory, never written. If it has expired, the pet runs `claude` in the background to renew it, without using any quota.")
+        tr("Le pet lit le jeton de Claude Code dans le Trousseau, comme Claude Code lui‑même, pour demander ton utilisation à `api.anthropic.com`, toutes les 5 min. Le jeton reste en mémoire, jamais écrit. S'il a expiré, le pet lance `claude` en arrière-plan pour qu'il le renouvelle, sans consommer de quota.",
+           "The pet reads Claude Code's token from the Keychain, the same way Claude Code does, to fetch your usage from `api.anthropic.com`, every 5 min. The token stays in memory, never written. If it has expired, the pet runs `claude` in the background to renew it, without using any quota.")
     }
 
     private var acceptTitle: String {
