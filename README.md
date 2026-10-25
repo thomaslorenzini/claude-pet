@@ -7,9 +7,9 @@ when nothing happens. When Claude asks for a permission or a question, you can a
 Works with the `claude` CLI and with the Code tab of Claude Desktop, through Claude Code's hooks. For Apple Silicon
 Macs.
 
-**[Website and live demo](https://getclaudepet.vercel.app)** · **[Download](https://github.com/thomaslorenzini/claude-pet/releases/latest)**
+**[Website and live demo](https://claudepet.com)** · **[Download](https://github.com/thomaslorenzini/claude-pet/releases/latest)**
 
-[![Claude Pet in the notch](docs/images/demo-poster.jpg)](https://getclaudepet.vercel.app)
+[![Claude Pet in the notch](docs/images/demo-poster.jpg)](https://claudepet.com)
 
 > **Not affiliated with Anthropic.** Claude Pet is an independent, unofficial project. "Claude" and "Claude Code" are
 > trademarks of Anthropic, PBC.
