@@ -5,8 +5,9 @@ import Security
 /// (ccusage / clanker-usage, claude-hud…), with the login Claude Code already holds.
 ///
 /// Safety rules:
-/// - The token is read from the Keychain item Claude Code owns ("Claude Code-credentials"); macOS
-///   asks the user before the first read. It stays in memory only, is never logged or written.
+/// - The token is read from the Keychain item Claude Code owns ("Claude Code-credentials"), through
+///   `/usr/bin/security` like Claude Code does (see `readWithSecurityTool`). It stays in memory only,
+///   is never logged or written.
 /// - It is never refreshed or written here: rewriting Claude Code's credentials could break its own
 ///   login. When it has expired (Claude Desktop sessions use their own auth and never renew it), the
 ///   app asks Claude Code to renew it the way any new session would: `claude -p /usage` (see
@@ -196,6 +197,56 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
     }
 
     private static func readToken() -> TokenResult {
+        let data: Data
+        switch readWithSecurityTool() {
+        case .some(.some(let d)): data = d
+        case .some(.none): return .failure(tr("Claude Code n'est pas connecté (rien dans le Trousseau)", "Claude Code isn't signed in (nothing in the Keychain)"))
+        case .none:
+            switch readWithSecItem() {
+            case .success(let d): data = d
+            case .failure(let message): return .failure(message)
+            }
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let login = json["claudeAiOauth"] as? [String: Any],
+              let value = login["accessToken"] as? String, !value.isEmpty else {
+            return .failure(tr("identifiants Claude Code illisibles", "unreadable Claude Code credentials"))
+        }
+        let expiry = (login["expiresAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
+        return .success((value, expiry))
+    }
+
+    /// Reads the item through `/usr/bin/security`, the way Claude Code reads it itself. Claude Code
+    /// rewrites the item with `security add-generic-password -U` on every token refresh, which resets its
+    /// partition list to `apple-tool:` and drops our "Always Allow": a direct read would ask for the
+    /// Keychain password again after each refresh, while the `security` tool stays allowed.
+    /// Returns nil when the tool fails (the caller falls back to a direct read), `.some(nil)` when
+    /// there is no such item.
+    private static func readWithSecurityTool() -> Data?? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["find-generic-password", "-s", keychainService, "-w"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        // 44 is errSecItemNotFound's exit status.
+        if process.terminationStatus == 44 { return .some(nil) }
+        guard process.terminationStatus == 0 else { return nil }
+        var trimmed = data
+        while trimmed.last == 0x0A { trimmed.removeLast() }
+        return trimmed.isEmpty ? nil : .some(trimmed)
+    }
+
+    private enum DataResult {
+        case success(Data)
+        case failure(String)
+    }
+
+    private static func readWithSecItem() -> DataResult {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -210,14 +261,10 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
         case errSecUserCanceled, errSecAuthFailed: return .failure(tr("accès au Trousseau refusé", "Keychain access denied"))
         default: return .failure(tr("Trousseau indisponible", "Keychain unavailable") + " (\(status))")
         }
-        guard let data = item as? Data,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let login = json["claudeAiOauth"] as? [String: Any],
-              let value = login["accessToken"] as? String, !value.isEmpty else {
+        guard let data = item as? Data else {
             return .failure(tr("identifiants Claude Code illisibles", "unreadable Claude Code credentials"))
         }
-        let expiry = (login["expiresAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
-        return .success((value, expiry))
+        return .success(data)
     }
 }
 
