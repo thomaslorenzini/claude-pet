@@ -6,7 +6,7 @@ when nothing happens. When Claude asks for a permission or a question, you can a
 
 Works with the `claude` CLI and with the Code tab of Claude Desktop, through Claude Code's hooks.
 
-![Claude Pet in the notch](site/public/demo-poster.jpg)
+![Claude Pet in the notch](docs/images/demo-poster.jpg)
 
 > **Not affiliated with Anthropic.** Claude Pet is an independent, unofficial project. "Claude" and "Claude Code" are
 > trademarks of Anthropic, PBC.
@@ -48,7 +48,7 @@ Sessions that were already open only see the hooks after a restart (or after ope
 
 ## What it does
 
-![A permission request in the notch](site/public/shots/notch-question.png)
+![A permission request in the notch](docs/images/notch-question.png)
 
 - **Reacts to Claude Code**: idle, thinking, working (with an icon for the tool: shell, edit, search, web, agent),
   error, waiting for you, happy when a task ends, asleep after 10 s of quiet. With several sessions open, it follows
@@ -63,8 +63,8 @@ Sessions that were already open only see the hooks after a restart (or after ope
   about 0.4 % awake.
 
 <p align="center">
-  <img src="site/public/shots/panel.png" width="320" alt="The menu bar panel">
-  <img src="site/public/shots/card.png" width="380" alt="A question in floating mode">
+  <img src="docs/images/panel.png" width="320" alt="The menu bar panel">
+  <img src="docs/images/card.png" width="380" alt="A question in floating mode">
 </p>
 
 The interface is in English or French, following your system language.

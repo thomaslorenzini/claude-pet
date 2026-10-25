@@ -5,3 +5,4 @@ sprites-export/
 .DS_Store
 *.dmg
 CLAUDE.md
+.claude/

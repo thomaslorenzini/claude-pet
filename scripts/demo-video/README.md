@@ -1,13 +1,13 @@
 # Vidéo de démo du site
 
-Fabrique `site/public/demo.mp4` (1920×1200, 16:10, H.264, 60 i/s, ~40 s, sans son) et
-`site/public/demo-poster.jpg`, à partir d'une vraie prise sur le MacBook (écran intégré, encoche),
+Fabrique `../claude-pet-site/public/demo.mp4` (1920×1200, 16:10, H.264, 60 i/s, ~40 s, sans son) et
+`../claude-pet-site/public/demo-poster.jpg`, à partir d'une vraie prise sur le MacBook (écran intégré, encoche),
 avec un faux curseur et des zooms façon Screen Studio ajoutés au montage.
 
 ```bash
 scripts/demo-video/record.sh  /tmp/claude-pet-demo           # ~1 min, bouge la vraie souris
-scripts/demo-video/render.py  /tmp/claude-pet-demo site/public/demo.mp4 \
-    --poster site/public/demo-poster.jpg --poster-time 1.0   # ~1 min 15
+scripts/demo-video/render.py  /tmp/claude-pet-demo ../claude-pet-site/public/demo.mp4 \
+    --poster ../claude-pet-site/public/demo-poster.jpg --poster-time 1.0   # ~1 min 15
 scripts/demo-video/render.py  /tmp/claude-pet-demo /dev/null --stills /tmp/st 5,11.6,27.5   # images de contrôle
 ```
 
