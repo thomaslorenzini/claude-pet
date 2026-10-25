@@ -40,7 +40,7 @@ struct HookSetup {
 
     static let standard: HookSetup = {
         // Tests: CLAUDE_PET_HOOKS_HOME=<dir> points the installer at a fake home, never at the real settings.
-        let home = ProcessInfo.processInfo.environment["CLAUDE_PET_HOOKS_HOME"].map { URL(fileURLWithPath: $0) }
+        let home = AppDelegate.devSetting("CLAUDE_PET_HOOKS_HOME").map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser
         return HookSetup(
             settingsURL: home.appendingPathComponent(".claude/settings.json"),

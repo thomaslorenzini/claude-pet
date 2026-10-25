@@ -98,10 +98,12 @@ These figures come from my MacBook (Apple M4); expect a bit more on older Macs. 
   This endpoint is not an official API and may stop working at any time.
 - Without quotas turned on, the gauges still fill in from your status line (CLI sessions) and the session
   transcript (context only).
-- **Update check.** Once a day, the app asks GitHub's public API which version is the latest release, only to show
-  "Update available" in the menu bar panel and the settings. No account is involved and nothing about you is sent
-  beyond what any web request carries (your IP address and the app's version in the User-Agent). It never downloads
-  or installs anything: the button opens the release page in your browser. Turn it off in **Settings › Data**.
+- **Automatic updates** (since 0.2.0, with [Sparkle](https://sparkle-project.org)). Once a day, the app reads a small
+  feed attached to the latest GitHub release. A newer version is downloaded in the background and installed when the
+  app quits, or right away from **Restart to update** in the menu bar panel. Every update is signed with a private
+  key only I hold (EdDSA), and the feed is signed too: the app checks both before installing anything, so a changed
+  file is rejected even if it comes from GitHub. Nothing about you is sent beyond what any web request carries (your
+  IP address, the app's name and version). Turn it off in **Settings › Data**; **Check** still works by hand.
 
 ## Uninstall
 
@@ -148,7 +150,7 @@ sends the hook's JSON with `curl -m 1` and always exits 0, so a stuck pet can ne
 second. Permission requests are the exception: that hook waits for your answer in the pet, and Claude Code shows its
 own dialog at the same time.
 
-The app is a Swift package with no dependencies (AppKit only). The sprites are drawn in code
+The app is a Swift package (AppKit), whose only dependency is [Sparkle](https://sparkle-project.org) for updates. The sprites are drawn in code
 (`Sources/ClaudePet/Sprites.swift`).
 
 ### Local API

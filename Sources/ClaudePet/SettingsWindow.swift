@@ -196,10 +196,9 @@ final class SettingsView: NSView {
         /// Nil while the source is off.
         var usageHealthy: Bool?
         var update = UpdateChecker.State.notChecked
+        var updateAutomatic = true
         var updateCurrent: String?
         var updateLastCheck: Date?
-        /// When "Check now" can be used again; nil when it can be used now.
-        var updateManualAt: Date?
         var hooks: HookSetup.Status?
         var settingsPath = ""
         /// Outcome of the last install or uninstall.
@@ -239,7 +238,7 @@ final class SettingsView: NSView {
     private let loginRow = SettingRow(accessory: PanelToggle())
     private let usageRow = SettingRow(accessory: PanelToggle())
     private let updateRow = SettingRow(accessory: PanelToggle())
-    /// While the check is on: "Check now", or, once a newer version exists, a button to its release page.
+    /// "Check now", or, once a newer version exists, a button that installs it.
     private let releaseRow = SettingRow(accessory: PanelPillButton(title: "", style: .primary))
     private let installButton = PanelPillButton(title: "", style: .primary)
     private let uninstallButton = PanelPillButton(title: "", style: .secondary)
@@ -247,10 +246,7 @@ final class SettingsView: NSView {
     private let restoreLatestButton = PanelPillButton(title: "", style: .secondary)
     private var petRows: [SettingRow] { [visibleRow, notchRow, sizeRow, positionRow, loginRow] }
     private var dataRows: [SettingRow] {
-        switch model.update {
-        case .off, .unavailable: return [usageRow, updateRow]
-        default: return [usageRow, updateRow, releaseRow]
-        }
+        model.update == .unavailable ? [usageRow, updateRow] : [usageRow, updateRow, releaseRow]
     }
     private let petIcon = SpriteComposer.frame(state: .idle, tool: nil, t: 0, bubble: false)
 
@@ -425,31 +421,32 @@ final class SettingsView: NSView {
         usageRow.subtitle = tr("Lus via Claude Code, toutes les 5 min · accès au Trousseau", "Read through Claude Code, every 5 min · Keychain access")
         (usageRow.accessory as! PanelToggle).isOn = m.usageAPI
 
-        updateRow.title = tr("Vérifier les mises à jour", "Check for updates")
+        updateRow.title = tr("Mises à jour automatiques", "Automatic updates")
         updateRow.subtitle = updateSubtitle()
         updateRow.isEnabled = m.update != .unavailable
-        (updateRow.accessory as! PanelToggle).isOn = m.update != .off && m.update != .unavailable
+        (updateRow.accessory as! PanelToggle).isOn = m.updateAutomatic && m.update != .unavailable
         let releaseButton = releaseRow.accessory as! PanelPillButton
-        if case .available(let version, _) = m.update {
-            releaseRow.title = tr("Version \(version) disponible", "Version \(version) available")
-            releaseRow.subtitle = tr("Ouvre sa page sur GitHub : rien n'est téléchargé tout seul", "Opens its page on GitHub: nothing downloads by itself")
-            releaseButton.title = tr("Voir sur GitHub", "View on GitHub")
+        switch m.update {
+        case .ready(let version):
+            releaseRow.title = tr("Version \(version) prête", "Version \(version) ready")
+            releaseRow.subtitle = tr("Téléchargée et vérifiée · installée à la fermeture de l'app", "Downloaded and verified · installed when the app quits")
+            releaseButton.title = tr("Redémarrer", "Restart")
             releaseButton.style = .primary
             releaseButton.isEnabled = true
-        } else {
+        case .available(let version):
+            releaseRow.title = tr("Version \(version) disponible", "Version \(version) available")
+            releaseRow.subtitle = tr("Signée par l'auteur, vérifiée avant d'être installée", "Signed by the author, verified before it's installed")
+            releaseButton.title = tr("Installer", "Install")
+            releaseButton.style = .primary
+            releaseButton.isEnabled = true
+        default:
             releaseRow.title = tr("Vérifier maintenant", "Check now")
-            if m.update == .checking {
-                releaseRow.subtitle = tr("Demande en cours à GitHub", "Asking GitHub")
-            } else if let at = m.updateManualAt {
-                // Rounded up: "in 1 min" while nearly two are left would be a lie.
-                let minutes = max(1, Int((at.timeIntervalSinceNow / 60).rounded(.up)))
-                releaseRow.subtitle = tr("De nouveau possible dans \(minutes) min, pour ménager GitHub", "Available again in \(minutes) min, to go easy on GitHub")
-            } else {
-                releaseRow.subtitle = tr("Sans attendre la vérification du jour", "Without waiting for the daily check")
-            }
+            releaseRow.subtitle = m.update == .checking
+                ? tr("Demande en cours à GitHub", "Asking GitHub")
+                : tr("Sans attendre la vérification du jour", "Without waiting for the daily check")
             releaseButton.title = m.update == .checking ? tr("Vérification…", "Checking…") : tr("Vérifier", "Check")
             releaseButton.style = .secondary
-            releaseButton.isEnabled = m.update != .checking && m.updateManualAt == nil
+            releaseButton.isEnabled = m.update != .checking
         }
 
         switch hookState {
@@ -478,14 +475,15 @@ final class SettingsView: NSView {
         } ?? ""
         let current = m.updateCurrent ?? "?"
         switch m.update {
-        case .off: return tr("Désactivée : aucune requête vers GitHub", "Off: no requests to GitHub")
         case .unavailable: return tr("Seulement pour l'app installée", "Only for the installed app")
-        case .notChecked: return tr("Une fois par jour, sur GitHub · pas encore vérifié", "Once a day, on GitHub · not checked yet")
+        case _ where !m.updateAutomatic:
+            return tr("Désactivées : rien sans « Vérifier » · v\(current)", "Off: nothing until “Check” · v\(current)") + checked
+        case .notChecked: return tr("Téléchargées et installées toutes seules · pas encore vérifié", "Downloaded and installed by themselves · not checked yet")
         case .checking: return tr("Vérification sur GitHub…", "Checking on GitHub…")
         case .upToDate: return tr("À jour (v\(current))", "Up to date (v\(current))") + checked
         // The row below says which version is out.
-        case .available: return tr("Tu as la v\(current)", "You have v\(current)") + checked
-        case .failed(let message): return tr("Échec : \(message) · nouvel essai demain", "Failed: \(message) · retrying tomorrow")
+        case .available, .ready: return tr("Tu as la v\(current)", "You have v\(current)") + checked
+        case .failed(let message): return tr("Échec : \(message)", "Failed: \(message)")
         }
     }
 
@@ -548,14 +546,13 @@ final class SettingsView: NSView {
         needsDisplay = true
     }
 
-    /// The release row's button: open the newer version's page, or check now if that's allowed yet.
+    /// The release row's button: install the newer version, or check now.
     private func releaseAction() {
-        if case .available = model.update {
-            onOpenUpdate?()
-            return
+        switch model.update {
+        case .available, .ready: onOpenUpdate?()
+        case .checking, .unavailable: break
+        default: onCheckUpdatesNow?()
         }
-        guard model.update != .checking, model.updateManualAt == nil else { return }
-        onCheckUpdatesNow?()
     }
 
     /// Tests: the controls by name, as clicks would.

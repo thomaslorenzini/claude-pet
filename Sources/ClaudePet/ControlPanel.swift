@@ -183,7 +183,7 @@ final class ControlPanelView: NSView {
         var notch = false
         var notchAvailable = false
         var transitioning = false
-        /// The newer version on GitHub, nil when up to date (or not checked).
+        /// The update line ("Restart to update to vX"…), nil when there is nothing to install.
         var update: String?
     }
 
@@ -204,7 +204,7 @@ final class ControlPanelView: NSView {
     private let settingsButton = FooterButton(title: tr("Réglages…", "Settings…"), shortcut: "⌘,")
     private let quitButton = FooterButton(title: tr("Quitter", "Quit"), shortcut: "⌘Q")
     private let updateButton: FooterButton = {
-        let button = FooterButton(title: "", shortcut: "↗")
+        let button = FooterButton(title: "", shortcut: "↻")
         button.showsDot = true
         return button
     }()
@@ -256,7 +256,7 @@ final class ControlPanelView: NSView {
         notchRow.isEnabled = model.notchAvailable && !model.transitioning
         (notchRow.accessory as! PanelToggle).isOn = model.notch
         updateButton.isHidden = model.update == nil
-        updateButton.title = model.update.map { tr("Mise à jour disponible : v\($0)", "Update available: v\($0)") } ?? ""
+        updateButton.title = model.update ?? ""
         needsLayout = true
         needsDisplay = true
     }

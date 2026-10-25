@@ -161,10 +161,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setUpPanel()
         setUpSettings()
 
-        let port = ProcessInfo.processInfo.environment["CLAUDE_PET_PORT"].flatMap(UInt16.init) ?? Self.defaultPort
+        let port = Self.devSetting("CLAUDE_PET_PORT").flatMap(UInt16.init) ?? Self.defaultPort
         server = EventServer(preferredPort: port)
         // CLAUDE_PET_NO_PUBLISH=1 runs a dev instance (with another CLAUDE_PET_PORT) that hooks never reach.
-        let publishes = ProcessInfo.processInfo.environment["CLAUDE_PET_NO_PUBLISH"] == nil
+        let publishes = Self.devSetting("CLAUDE_PET_NO_PUBLISH") == nil
         server.onReady = { port in if publishes { Endpoint.publish(port: port) } }
         server.onDuplicate = { port in
             NSLog("claude-pet: une autre instance tourne déjà sur le port %d, on quitte", Int(port))
@@ -219,8 +219,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if radius != nil || ear != nil { self.pet.tuneNotch(radius: radius, ear: ear) }
             if control["renew_usage_token"] as? Bool == true { self.usageAPI.renewNow() }
             // Tests: checks GitHub now, or pretends it answered this version ("" forgets it).
-            if control["check_updates"] as? Bool == true { self.updates.checkNow() }
-            if let latest = control["fake_latest"] as? String { self.updates.fake(latest: latest) }
+            if control["check_updates"] as? Bool == true { self.updates.checkInBackground() }
+            if control["install_update"] as? Bool == true { self.updates.install() }
             // Tests: open or close the request panel as a hover would.
             if let reveal = control["reveal"] as? Bool { self.pet.revealRequest(reveal) }
             // Tests: renders the pet's windows to PNG, even with the display asleep.
@@ -278,7 +278,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot["current_version"] = self.updates.currentVersion ?? NSNull()
             snapshot["latest_version"] = self.updates.latestVersion ?? NSNull()
             snapshot["update_last_check"] = self.updates.lastCheck.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
-            snapshot["update_manual_at"] = self.updates.manualCheckAvailableAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
+            snapshot["update_automatic"] = self.updates.isAutomatic
+            snapshot["update_error"] = self.updates.lastError ?? NSNull()
             return snapshot
         }
         server.onStatusChange = { [unowned self] status in
@@ -369,7 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.view.onToggleNotch = { [unowned self] in self.toggleNotch() }
         panel.view.onUpdate = { [unowned self] in
             self.panel.close()
-            self.updates.openPage()
+            self.updates.install()
         }
     }
 
@@ -415,7 +416,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.notch = pet.wantsNotch
         m.notchAvailable = pet.notchAvailable
         m.transitioning = pet.isTransitioning
-        if case .available(let version, _) = updates.state { m.update = version }
+        m.update = updateLine
         return m
     }
 
@@ -462,11 +463,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.settings.refresh()
         }
         view.onToggleUpdates = { [unowned self] in
-            UpdateChecker.isEnabled.toggle()
-            UpdateChecker.isEnabled ? self.updates.start(soon: true) : self.updates.stop()
+            self.updates.isAutomatic.toggle()
             self.settings.refresh()
         }
-        view.onOpenUpdate = { [unowned self] in self.updates.openPage() }
+        view.onOpenUpdate = { [unowned self] in self.updates.install() }
         view.onCheckUpdatesNow = { [unowned self] in self.updates.checkManually() }
         view.onToggleLogin = { [unowned self] in
             self.loginMessage = LoginItem.set(LoginItem.state != .on)
@@ -536,7 +536,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.update = updates.state
         m.updateCurrent = updates.currentVersion
         m.updateLastCheck = updates.lastCheck
-        m.updateManualAt = updates.manualCheckAvailableAt
+        m.updateAutomatic = updates.isAutomatic
         m.hooks = hookStatus
         m.settingsPath = (HookSetup.standard.settingsURL.path as NSString).abbreviatingWithTildeInPath
         m.hookMessage = hookMessage?.text
@@ -550,6 +550,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: Pet's context menu
+
+    /// Test settings: from the environment, or from the defaults for an app that Sparkle relaunched
+    /// (without the environment it was started with). Never set for real users.
+    static func devSetting(_ name: String) -> String? {
+        ProcessInfo.processInfo.environment[name] ?? UserDefaults.standard.string(forKey: name)
+    }
+
+    /// The panel's and the menu's update line; nil while there's nothing to install.
+    private var updateLine: String? {
+        switch updates.state {
+        case .ready(let version): return tr("Redémarrer pour passer à la v\(version)", "Restart to update to v\(version)")
+        case .available(let version): return tr("Mise à jour disponible : v\(version)…", "Update available: v\(version)…")
+        default: return nil
+        }
+    }
 
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
@@ -604,10 +619,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(submenu: size, title: tr("Taille", "Size"))
 
         menu.addItem(.separator())
-        if case .available(let version, _) = updates.state {
-            menu.addItem(action: tr("Mise à jour disponible : v\(version)…", "Update available: v\(version)…")) { [unowned self] in
-                self.updates.openPage()
-            }
+        if let line = updateLine {
+            menu.addItem(action: line) { [unowned self] in self.updates.install() }
         }
         menu.addItem(action: tr("Réglages…", "Settings…"), key: ",") { [unowned self] in self.openSettings() }
         menu.addItem(action: tr("Quitter Claude Pet", "Quit Claude Pet"), key: "q") { NSApp.terminate(nil) }
