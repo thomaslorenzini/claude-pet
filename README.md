@@ -4,7 +4,8 @@ A pixel-art pet for macOS that lives in your MacBook's notch and reacts to what 
 Claude thinks, types on a tiny laptop while Claude runs commands, waves at you when Claude needs an answer, and naps
 when nothing happens. When Claude asks for a permission or a question, you can answer right from the notch.
 
-Works with the `claude` CLI and with the Code tab of Claude Desktop, through Claude Code's hooks.
+Works with the `claude` CLI and with the Code tab of Claude Desktop, through Claude Code's hooks. For Apple Silicon
+Macs.
 
 ![Claude Pet in the notch](docs/images/demo-poster.jpg)
 
@@ -30,7 +31,8 @@ can't check it for malware. To open it anyway, pick one:
 If you'd rather not trust a downloaded binary, [build it yourself](#build-from-source): it takes a minute and
 Gatekeeper doesn't get in the way.
 
-Requires macOS 13 or later. The notch mode needs a MacBook with a notch; elsewhere the pet floats on your desktop.
+Requires a Mac with **Apple Silicon** (M1 or later) and macOS 13 or later. The download doesn't run on Intel Macs.
+The notch mode needs a MacBook with a notch; elsewhere the pet floats on your desktop.
 
 ### First launch
 
