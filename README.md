@@ -64,7 +64,7 @@ Sessions that were already open only see the hooks after a restart (or after ope
   context window.
 - **Lives in the notch or floats**: drag it into the notch and out again, or toggle it from the menu bar.
 - **Stays out of the way**: clicks go through it everywhere except on the pet itself, it uses no CPU while asleep and
-  about 0.4 % awake.
+  under 1 % of one core at its busiest ([measured numbers](#performance)).
 
 <p align="center">
   <img src="docs/images/panel.png" width="320" alt="The menu bar panel">
@@ -72,6 +72,20 @@ Sessions that were already open only see the hooks after a restart (or after ope
 </p>
 
 The interface is in English or French, following your system language.
+
+## Performance
+
+I'm the kind of developer who can't leave an idle CPU spike alone, and an app that sits on your screen all day has no
+excuse to be heavy. So, in full transparency, here are the exact numbers, measured rather than estimated.
+
+![CPU use per state and memory use of Claude Pet](docs/images/resource-usage.svg)
+
+In short: about 14 MB of memory, under 1 % of a single core at its busiest, and 0 % while it sleeps. Nothing is
+polled: the pet redraws only when something changes, its animation stops completely while it naps, and the mouse is
+only sampled while it moves. Each hook costs Claude Code around 10 ms, and nothing at all when the app is closed.
+
+These figures come from my MacBook (Apple M4); expect a bit more on older Macs. To measure on yours:
+`scripts/measure-cpu.sh` (it moves the mouse for 30 s for the last case).
 
 ## Privacy
 
