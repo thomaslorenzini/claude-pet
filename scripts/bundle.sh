@@ -22,7 +22,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key><string>Claude Pet</string>
-  <key>CFBundleIdentifier</key><string>local.claude-pet</string>
+  <key>CFBundleIdentifier</key><string>fr.thomaslorenzini.claude-pet</string>
   <key>CFBundleExecutable</key><string>ClaudePet</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
