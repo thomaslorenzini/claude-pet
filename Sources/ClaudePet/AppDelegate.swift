@@ -247,6 +247,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if let name = control["settings_press"] as? String { self.settings.view.press(name) }
             if let path = control["settings_snapshot"] as? String { self.settings.snapshot(to: path) }
+            if let y = control["settings_scroll"] as? Double { self.settings.scroll(to: CGFloat(y)) }
+            if let path = control["settings_window_snapshot"] as? String { self.settings.windowSnapshot(to: path) }
             // Tests: the first-run tutorial, whether it was already seen or not.
             if let on = control["tutorial"] as? Bool { on ? self.startTutorial() : self.tutorial?.stop() }
             if control["tutorial_skip"] as? Bool == true { self.tutorial?.skip() }

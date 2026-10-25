@@ -37,6 +37,10 @@ final class SettingsWindow: NSWindow {
 final class SettingsController: NSObject, NSWindowDelegate {
     let window = SettingsWindow()
     let view = SettingsView()
+    /// The content is taller than many laptop screens: past this, the window stops growing and scrolls.
+    static let maxHeight: CGFloat = 620
+    private let scrollView = NSScrollView()
+    private let titlebarStrip = TitlebarStrip()
     var modelProvider: (() -> SettingsView.Model)?
     /// The window came to the front: a good moment to re-read what may have changed outside the app.
     var onActivate: (() -> Void)?
@@ -45,8 +49,42 @@ final class SettingsController: NSObject, NSWindowDelegate {
 
     override init() {
         super.init()
-        window.contentView = view
+        scrollView.documentView = view
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.verticalScrollElasticity = .allowed
+        // The scrollbar starts below the traffic lights, like the content at rest.
+        scrollView.scrollerInsets = NSEdgeInsets(top: TitlebarStrip.height, left: 0, bottom: 0, right: 0)
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(didScroll), name: NSView.boundsDidChangeNotification,
+                                               object: scrollView.contentView)
+        let container = NSView(frame: CGRect(x: 0, y: 0, width: SettingsView.width, height: 600))
+        scrollView.frame = container.bounds
+        titlebarStrip.frame = CGRect(x: 0, y: container.bounds.height - TitlebarStrip.height,
+                                     width: container.bounds.width, height: TitlebarStrip.height)
+        scrollView.autoresizingMask = [.width, .height]
+        titlebarStrip.autoresizingMask = [.width, .minYMargin]
+        container.addSubview(scrollView)
+        container.addSubview(titlebarStrip)
+        window.contentView = container
         window.delegate = self
+    }
+
+    /// Scrolled content slides under the traffic lights: the strip covers it, with a hairline once scrolled.
+    @objc private func didScroll() {
+        let scrolled = scrollView.contentView.bounds.minY > 0.5
+        if titlebarStrip.scrolled != scrolled {
+            titlebarStrip.scrolled = scrolled
+            titlebarStrip.needsDisplay = true
+        }
+    }
+
+    /// The window's height for the content: all of it when it fits, or a shorter, scrolling window.
+    private func windowHeight(for content: CGFloat) -> CGFloat {
+        let screen = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? Self.maxHeight
+        return min(content, Self.maxHeight, screen - 40)
     }
 
     func open() {
@@ -67,7 +105,11 @@ final class SettingsController: NSObject, NSWindowDelegate {
     func refresh(force: Bool = false) {
         guard force || isOpen, let model = modelProvider?() else { return }
         view.model = model
-        let height = view.preferredHeight
+        let content = view.preferredHeight
+        if abs(view.frame.height - content) > 0.5 {
+            view.frame = CGRect(origin: .zero, size: CGSize(width: SettingsView.width, height: content))
+        }
+        let height = windowHeight(for: content)
         if abs(window.frame.height - height) > 0.5 {
             // Grows downwards: the titlebar stays where it was.
             var frame = window.frame
@@ -95,6 +137,44 @@ final class SettingsController: NSObject, NSWindowDelegate {
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+    }
+
+    /// The window as it is on screen, scroll position included (`snapshot` draws the whole content).
+    func windowSnapshot(to path: String) {
+        refresh(force: true)
+        guard let content = window.contentView,
+              let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return }
+        content.cacheDisplay(in: content.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+    }
+
+    /// For tests: scrolls the content to `y` from its top.
+    func scroll(to y: CGFloat) {
+        scrollView.contentView.scroll(to: CGPoint(x: 0, y: max(0, min(y, view.frame.height - scrollView.contentView.bounds.height))))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+}
+
+/// The paper behind the transparent titlebar, over the scrolled content.
+private final class TitlebarStrip: NSView {
+    static let height: CGFloat = 28
+    var scrolled = false
+
+    init() {
+        super.init(frame: CGRect(x: 0, y: 0, width: SettingsView.width, height: Self.height))
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var mouseDownCanMoveWindow: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let theme = PanelTheme.current(effectiveAppearance)
+        theme.background.setFill()
+        bounds.fill()
+        guard scrolled else { return }
+        theme.stroke.setFill()
+        CGRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
     }
 }
 
