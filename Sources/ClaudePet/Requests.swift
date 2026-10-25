@@ -36,11 +36,22 @@ struct PendingRequest {
 }
 
 final class RequestCenter {
+    /// How a request left the queue.
+    enum End {
+        case allowed, denied, answered
+        /// No decision sent: "Ignorer", or a later hook showed it was answered elsewhere.
+        case released
+        /// The hook went away: Claude Code killed it (measured on an interrupt with Esc) or quit.
+        case cancelled
+    }
+
     /// Oldest first; the UI shows the first one.
     private(set) var queue: [PendingRequest] = []
     private var responders: [Int: (Data?) -> Void] = [:]
     private var nextID = 1
     var onChange: (() -> Void)?
+    /// Called once the request is out of the queue, before `onChange`.
+    var onEnd: ((PendingRequest, End) -> Void)?
 
     var current: PendingRequest? { queue.first }
 
@@ -66,13 +77,13 @@ final class RequestCenter {
     }
 
     func allow(_ id: Int) {
-        finish(id, output: ["hookSpecificOutput": [
+        finish(id, .allowed, output: ["hookSpecificOutput": [
             "hookEventName": "PermissionRequest", "decision": ["behavior": "allow"],
         ]])
     }
 
     func deny(_ id: Int) {
-        finish(id, output: ["hookSpecificOutput": [
+        finish(id, .denied, output: ["hookSpecificOutput": [
             "hookEventName": "PermissionRequest",
             "decision": ["behavior": "deny", "message": tr("Refusé par l'utilisateur depuis Claude Pet.", "Denied by the user from Claude Pet.")],
         ]])
@@ -85,18 +96,19 @@ final class RequestCenter {
         input["answers"] = answers
         // Answering AskUserQuestion takes "allow" plus the questions echoed back with the answers.
         // Through PermissionRequest, Claude's own dialog shows at the same time (verified 2026-10-23).
-        finish(id, output: ["hookSpecificOutput": [
+        finish(id, .answered, output: ["hookSpecificOutput": [
             "hookEventName": "PermissionRequest", "decision": ["behavior": "allow", "updatedInput": input],
         ]])
     }
 
     /// Leaves the decision to Claude Code's own dialog.
-    func dismiss(_ id: Int) { finish(id, output: nil) }
+    func dismiss(_ id: Int) { finish(id, .released, output: nil) }
 
     /// The hook went away (answered elsewhere, Claude Code quit): nothing to send.
     func cancel(_ id: Int) {
-        guard responders.removeValue(forKey: id) != nil else { return }
+        guard responders.removeValue(forKey: id) != nil, let request = queue.first(where: { $0.id == id }) else { return }
         queue.removeAll { $0.id == id }
+        onEnd?(request, .cancelled)
         onChange?()
     }
 
@@ -108,8 +120,10 @@ final class RequestCenter {
         for request in queue where request.session == session {
             switch event["hook_event_name"] as? String {
             case "PostToolUse", "PostToolUseFailure":
-                // Only the tool call that was asked about: others may run in parallel.
-                if tool == request.tool, NSDictionary(dictionary: input).isEqual(to: request.toolInput) { dismiss(request.id) }
+                // Only the tool call that was asked about: others may run in parallel. The permission
+                // payload has no tool_use_id, and the tool's input comes back with more keys (an
+                // AskUserQuestion answered in the terminal adds "answers" and "annotations").
+                if tool == request.tool, Self.contains(input, request.toolInput) { dismiss(request.id) }
             case "UserPromptSubmit", "Stop", "StopFailure", "SessionEnd":
                 dismiss(request.id)
             default:
@@ -118,11 +132,20 @@ final class RequestCenter {
         }
     }
 
-    private func finish(_ id: Int, output: [String: Any]?) {
-        guard let respond = responders.removeValue(forKey: id) else { return }
+    private func finish(_ id: Int, _ end: End, output: [String: Any]?) {
+        guard let respond = responders.removeValue(forKey: id), let request = queue.first(where: { $0.id == id }) else { return }
         queue.removeAll { $0.id == id }
         respond(output.flatMap { try? JSONSerialization.data(withJSONObject: $0) })
+        onEnd?(request, end)
         onChange?()
+    }
+
+    /// Every key of `asked` is in `input` with the same value.
+    private static func contains(_ input: [String: Any], _ asked: [String: Any]) -> Bool {
+        asked.allSatisfy { key, value in
+            guard let other = input[key] else { return false }
+            return NSDictionary(dictionary: [key: value]).isEqual(to: [key: other])
+        }
     }
 
     // MARK: Payloads

@@ -116,6 +116,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         requests.onChange = { [unowned self] in
             self.pet.showRequest(self.requests.current, waiting: max(0, self.requests.queue.count - 1))
         }
+        requests.onEnd = { [unowned self] request, end in
+            // Another request of the same session keeps the alert.
+            guard !self.requests.queue.contains(where: { $0.session == request.session }) else { return }
+            switch end {
+            case .allowed:
+                self.tracker.answered(session: request.session, state: .working, toolName: request.tool)
+            case .denied, .answered:
+                // Claude goes on with the denial or the answers.
+                self.tracker.answered(session: request.session, state: .thinking)
+            case .cancelled:
+                // Killed hook: measured on an interrupt (Esc in the terminal), after which Claude waits for a
+                // new prompt without any hook. If another app allowed it instead, PostToolUse follows.
+                self.tracker.answered(session: request.session, state: .idle)
+            case .released:
+                // "Ignorer" sets the session aside itself; otherwise a hook has moved the session on.
+                return
+            }
+            self.refresh()
+        }
         pet.requestView.onAllow = { [unowned self] in self.requests.allow($0) }
         pet.requestView.onDeny = { [unowned self] in self.requests.deny($0) }
         pet.requestView.onAnswer = { [unowned self] in self.requests.answer($0, $1) }

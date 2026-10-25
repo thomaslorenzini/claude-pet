@@ -69,6 +69,9 @@ struct SessionInfo {
     /// The user set this session's request aside in the pet ("Ignorer"): no alert for it until the
     /// session moves on, not even from the reminder notification Claude Code sends a bit later.
     var setAside = false
+    /// The session's request was answered: a `permission_prompt` reminder arriving now is stale. Unlike
+    /// `setAside`, other notifications (an MCP elicitation…) still alert.
+    var promptAnswered = false
 }
 
 /// Turns hook events into per-session states, then aggregates them into one display state.
@@ -109,6 +112,20 @@ final class SessionTracker {
         lastActivity = now
     }
 
+    /// The session's last request was answered (in the pet or elsewhere), but Claude Code sends no hook
+    /// for that: without this, the session would stay waiting until its next event, forever after an
+    /// interrupt. `toolName` makes `state` working on that tool.
+    func answered(session id: String, state: PetState, toolName: String? = nil, now: Date = Date()) {
+        guard var s = sessions[id], s.state == .waiting else { return }
+        s.promptAnswered = true
+        s.state = state
+        s.transientUntil = nil
+        s.tool = toolName.map(ToolKind.init(toolName:))
+        s.toolName = toolName
+        sessions[id] = s
+        lastActivity = now
+    }
+
     /// Counts as activity without changing any session: a click restarts the sleep countdown.
     func poke(now: Date = Date()) {
         lastActivity = now
@@ -126,7 +143,10 @@ final class SessionTracker {
 
         var s = sessions[id] ?? SessionInfo(id: id, state: .idle, lastEvent: now)
         s.lastEvent = now
-        if name != "Notification" { s.setAside = false }
+        if name != "Notification" {
+            s.setAside = false
+            s.promptAnswered = false
+        }
         if let cwd = event["cwd"] as? String { s.cwd = cwd }
         let toolName = event["tool_name"] as? String
 
@@ -179,7 +199,7 @@ final class SessionTracker {
             let type = event["notification_type"] as? String
             if type == "idle_prompt" || type == "auth_success" {
                 if s.state != .waiting { set(.idle) }
-            } else if !s.setAside {
+            } else if !s.setAside && !(s.promptAnswered && type == "permission_prompt") {
                 set(.waiting)
             }
         case "Stop":
