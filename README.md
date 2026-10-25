@@ -1,236 +1,154 @@
 # Claude Pet
 
-Un petit compagnon en pixel-art qui vit par-dessus le bureau macOS et réagit à ce que fait Claude Code
-(CLI `claude` et onglet Code de Claude Desktop), via les hooks de Claude Code.
+A pixel-art pet for macOS that lives in your MacBook's notch and reacts to what Claude Code is doing. It thinks while
+Claude thinks, types on a tiny laptop while Claude runs commands, waves at you when Claude needs an answer, and naps
+when nothing happens. When Claude asks for a permission or a question, you can answer right from the notch.
 
-```
-Claude Code ──hook──▶ curl POST 127.0.0.1:47319/event ──▶ ClaudePet.app ──▶ sprite
-```
+Works with the `claude` CLI and with the Code tab of Claude Desktop, through Claude Code's hooks.
 
-## Installer
+![Claude Pet in the notch](site/public/demo-poster.jpg)
 
-Ouvre `ClaudePet.dmg` et glisse **Claude Pet** dans Applications, puis lance-le depuis Applications. Au premier
-lancement, un écran détaille tout ce qui va être installé (les hooks dans `~/.claude/settings.json`, le relais de la
-ligne de statut, quelques fichiers dans `~/Library/Application Support/claude-pet/`). Une case, cochée par défaut, ouvre aussi le pet au démarrage du Mac. **Accepter** installe tout et
-démarre le pet, directement dans l'encoche si ton Mac en a une ; **Refuser** ferme l'app sans rien écrire, et l'écran reviendra au prochain lancement. Avant toute
-écriture, `settings.json` est copié : la copie d'origine (avant Claude Pet) et celle d'avant la dernière
-modification peuvent être remises depuis Réglages › Claude Code.
+> **Not affiliated with Anthropic.** Claude Pet is an independent, unofficial project. "Claude" and "Claude Code" are
+> trademarks of Anthropic, PBC.
 
-Le DMG n'est pas encore signé par un développeur identifié ni notarisé : sur un autre Mac, macOS bloquera l'app
-(Réglages système › Confidentialité et sécurité › « Ouvrir quand même »).
+## Install
 
-## Lancer depuis les sources
+1. Download **ClaudePet.dmg** from the [latest release](https://github.com/thomaslorenzini/claude-pet/releases/latest).
+2. Open it and drag **Claude Pet** into Applications.
+3. Open Claude Pet from Applications.
 
-Il faut macOS 13+ et Swift 5.10+ (les Command Line Tools suffisent, pas besoin de Xcode).
+**macOS will block it the first time.** The app isn't signed with an Apple Developer ID yet, so Gatekeeper says it
+can't check it for malware. To open it anyway, pick one:
 
-```bash
-swift run ClaudePet
-scripts/make-dmg.sh          # construit build/ClaudePet.dmg
-```
+- Open it once, then go to **System Settings › Privacy & Security**, scroll down and click **Open Anyway**.
+- Or, in Terminal:
 
-Le pet apparaît en bas à droite, et sa silhouette dans la barre des menus. Un clic sur celle-ci ouvre un panneau :
-le pet animé et ce que fait Claude, les trois jauges d'utilisation, deux réglages rapides (**Afficher le pet**,
-**Vivre dans l'encoche**), l'état du serveur, **Réglages…** (⌘,) et **Quitter** (⌘Q). Échap ou un clic ailleurs le referme. La fenêtre de réglages regroupe : afficher le pet, l'encoche,
-la taille, le coin de l'écran, l'ouverture au démarrage du Mac, les quotas du compte, l'état des hooks (réparer, réinstaller, désinstaller) et la
-restauration des copies de `settings.json`. Glisse le pet à la souris : sa position est mémorisée. Un clic droit sur
-le pet ouvre un menu avec les réglages essentiels.
-L'interface est en français si macOS est en français, en anglais sinon (la langue choisie pour Claude Pet
-dans Réglages système › Langue et région est respectée).
+  ```bash
+  xattr -dr com.apple.quarantine "/Applications/Claude Pet.app"
+  ```
 
-### Mode encoche
+If you'd rather not trust a downloaded binary, [build it yourself](#build-from-source): it takes a minute and
+Gatekeeper doesn't get in the way.
 
-Sur un MacBook à encoche, active **Vivre dans l'encoche** (panneau de la barre des menus, ou ⌘N dans le clic droit). Le pet s'accroupit, s'envole vers
-l'encoche en s'inclinant, et un cadre noir sort de l'encoche pour le recevoir. Décocher refait le trajet en sens inverse,
-jusqu'à sa dernière position flottante. Le choix est mémorisé au relancement.
+Requires macOS 13 or later. The notch mode needs a MacBook with a notch; elsewhere the pet floats on your desktop.
 
-- Le cadre commence 14 pt *sous* l'encoche, où l'écran n'a pas de pixels : la jonction avec l'encoche physique, coin
-  arrondi compris, est invisible. Replié, il a la hauteur exacte de l'encoche (`safeAreaInsets.top`).
-- Ses coins ont les rayons de l'encoche native, quelle que soit sa taille : 10 pt en bas (aussi pour le raccord concave
-  sous l'encoche quand il est déplié) et 6 pt pour le petit arrondi concave en haut. Ce sont de vrais arcs de cercle.
-  Pour s'ouvrir, il glisse de derrière l'encoche au lieu de s'élargir, donc ses coins restent intacts.
-- macOS n'expose pas la forme de l'encoche, donc ces rayons sont estimés. Pour les ajuster à l'œil, compare avec le
-  coin inférieur gauche de l'encoche : `curl -d '{"notch_radius": 11, "notch_ear": 5}' 127.0.0.1:47319/control`
-  (la valeur est mémorisée).
-- Dans l'encoche, le pet utilise un sprite compact (le corps recadré, avec l'icône d'état à côté au lieu d'une bulle),
-  ce qui permet de le dessiner à l'échelle 2 dans 32 pt.
-- Au survol : retour haptique (`NSHapticFeedbackManager`, seulement si le doigt est posé sur un trackpad Force Touch),
-  et le cadre et le pet grandissent avec un ressort (×4). Le cadre se referme quand le curseur s'éloigne.
-- Le cadre déplié recouvre temporairement les icônes de barre des menus qui sont juste à droite de l'encoche.
-- Si l'encoche disparaît (écran externe seul, capot fermé), le pet revient en mode flottant.
+### First launch
 
-### Jauges d'usage
+A window lists everything that will be written before anything happens:
 
-Quand tu survoles l'encoche, trois anneaux apparaissent autour du pet pendant que le cadre s'agrandit : **bleu** en bas
-à gauche pour le quota 5 h, **violet** en bas à droite pour le quota de la semaine, **vert** en haut à droite pour la
-fenêtre de contexte de la session suivie. Chacun affiche son pourcentage. Replié, le cadre ne montre que le pet. Passer sur un anneau affiche le détail (« Quota 5 h : 50 % ·
-reset dans 2 h 04 »).
+- the hooks, added to `~/.claude/settings.json` next to your own (nothing else in the file changes);
+- a small relay for your status line, which forwards its data to the pet and then runs your original command, so your
+  terminal looks the same;
+- a few files in `~/Library/Application Support/claude-pet/`.
 
-Aucune source officielle ne stocke ces chiffres. Le pet les lit en lecture seule, et la donnée la plus récente gagne :
+`settings.json` is backed up before every write. **Decline** quits without writing anything. Everything can be
+repaired, uninstalled or restored later from **Settings › Claude Code**.
 
-| Source | Donne | Quand |
-|---|---|---|
-| API d'usage d'Anthropic (`api.anthropic.com/api/oauth/usage`), comme ccusage ou claude-hud | quotas 5 h et semaine, frais | partout, toutes les 5 min, si Claude Code est connecté (Pro/Max) |
-| Ligne de statut de Claude Code (relais `statusline.sh`) | quotas 5 h et semaine, contexte exact | sessions `claude` dans un terminal (Desktop ne l'exécute pas) ; quotas pour Pro/Max, après la première réponse |
-| `~/Library/Application Support/Claude/plan-usage-history.json` | quotas | quand Claude Desktop l'écrit (au plus toutes les 270 s ; parfois plus du tout) |
-| Transcript de la session (chemin reçu avec chaque hook) | contexte estimé (« ≈ », taille de fenêtre supposée : 1M, sauf si la ligne de statut de la session donne la vraie) | toutes les sessions, Desktop compris |
+Sessions that were already open only see the hooks after a restart (or after opening `/hooks`).
 
-Une donnée trop vieille pour sa fenêtre, ou dont la fenêtre a été réinitialisée, est affichée comme inconnue (anneau
-vide), jamais comme 0 %.
+## What it does
 
-**L'API d'usage et ton Trousseau.** Pour l'API, l'app lit le jeton de connexion que Claude Code range dans le
-Trousseau (« Claude Code-credentials »). macOS demande ton accord au premier accès. L'app étant signée localement, il le
-redemandera sans doute après chaque recompilation. Le jeton reste en mémoire : il n'est jamais écrit, ni journalisé, ni
-renouvelé par l'app elle-même. Les sessions de Claude Desktop ne renouvellent pas ce jeton (elles utilisent la
-connexion de Desktop). S'il a expiré, l'app demande donc à Claude Code de le faire en lançant `claude -p /usage`, sans
-hooks ni historique, au plus une fois toutes les 10 min. Cette commande n'envoie aucune requête au modèle et ne
-consomme pas de quota (vérifié dans son journal de debug). La requête est un GET vers cette seule
-adresse, sans redirection ni cookie, avec des pauses plus longues en cas d'erreur. Elle est désactivée par défaut (case de
-l'écran d'accueil) ; on l'active ou la coupe dans Réglages › Données › **Quotas du compte**, où s'affiche aussi son état.
-Le cookie de session claude.ai (endpoint `/usage` de Desktop) n'est, lui, jamais utilisé.
+![A permission request in the notch](site/public/shots/notch-question.png)
 
-L'installation remplace la commande de ta ligne de statut par le relais, qui transmet le JSON au pet puis lance ta
-commande d'origine (sauvegardée dans `~/Library/Application Support/claude-pet/statusline-original`) : l'affichage du
-terminal ne change pas. `uninstall` la remet en place.
+- **Reacts to Claude Code**: idle, thinking, working (with an icon for the tool: shell, edit, search, web, agent),
+  error, waiting for you, happy when a task ends, asleep after 10 s of quiet. With several sessions open, it follows
+  the one that matters most: one that needs you is never hidden behind one that is working.
+- **Answers Claude for you**: permission requests (**Allow** once, **Deny**, or **Ignore** to answer in Claude) and
+  `AskUserQuestion` prompts, including multiple choice and a free-text **Other**. Claude Code keeps the first answer
+  it gets, wherever it comes from: the pet, the terminal, Desktop.
+- **Shows your usage**: hover the notch to see your 5-hour quota, your weekly quota and the current session's
+  context window.
+- **Lives in the notch or floats**: drag it into the notch and out again, or toggle it from the menu bar.
+- **Stays out of the way**: clicks go through it everywhere except on the pet itself, it uses no CPU while asleep and
+  about 0.4 % awake.
 
-### Glisser-déposer vers l'encoche et hors de l'encoche
+<p align="center">
+  <img src="site/public/shots/panel.png" width="320" alt="The menu bar panel">
+  <img src="site/public/shots/card.png" width="380" alt="A question in floating mode">
+</p>
 
-On peut aussi changer de mode à la main, sans le menu :
+The interface is in English or French, following your system language.
 
-- **Vers l'encoche** : attrape le pet et approche-le de l'encoche. Il reste exactement sous ton curseur et prend peu à
-  peu la taille qu'il a dans l'encoche survolée, pendant que le cadre noir commence à sortir de l'encoche. Assez près,
-  un retour haptique signale la zone de dépôt, et le cadre s'ouvre comme au survol. Lâche-le : il glisse à sa place et
-  s'écrase un instant (« plop »). Le cadre se replie ensuite normalement quand la souris s'en va.
-- **Hors de l'encoche** : attrape le pet (ou le cadre survolé) et tire-le. Le cadre se rentre dans l'encoche à mesure
-  que tu t'éloignes, et le pet reprend sa taille normale. Lâché hors de la zone, il atterrit là où tu le
-  poses, toujours entièrement à l'écran et sous la barre des menus.
-- Pendant le drag, le pet s'incline selon sa vitesse horizontale. Un simple clic lui fait faire un petit rebond,
-  puis il te fait coucou pendant 2,5 s, quoi que fasse Claude, avant de reprendre son état. S'il dormait, il se
-  rendort 10 s plus tard s'il ne se passe rien.
+## Privacy
 
-Pour une vraie app (sans icône Dock, lançable depuis le Finder ou au login) :
+- Everything stays on your Mac. The app talks to Claude Code over `127.0.0.1` only and refuses requests from web
+  pages.
+- **Account quotas are off by default.** If you turn them on (first-launch checkbox, or **Settings › Data**), the app
+  reads the login token Claude Code keeps in your Keychain and asks Anthropic's usage endpoint for your quotas every
+  5 minutes. The token stays in memory: it is never written, logged or sent anywhere else. When it has expired, the
+  app runs `claude -p /usage` so Claude Code renews it itself; this sends no request to the model and uses no quota.
+  This endpoint is not an official API and may stop working at any time.
+- Without quotas turned on, the gauges still fill in from your status line (CLI sessions) and the session
+  transcript (context only).
+
+## Uninstall
+
+**Settings › Claude Code › Uninstall** removes the hooks and puts your status line back, then drag the app to the
+Trash. `~/.claude/settings.json.claude-pet-original` is the copy of your settings from before the first install.
+
+## Build from source
+
+You need macOS 13+ and Swift 5.10+. The Command Line Tools are enough (`xcode-select --install`), Xcode isn't
+needed.
 
 ```bash
-scripts/bundle.sh && open build/ClaudePet.app
+git clone https://github.com/thomaslorenzini/claude-pet.git
+cd claude-pet
+scripts/bundle.sh
+open build/ClaudePet.app
 ```
 
-Port : 47319 par défaut (`CLAUDE_PET_PORT=12345 swift run ClaudePet` pour en préférer un autre). S'il est occupé,
-l'app essaie 47320, 47321… (20 essais). Si l'occupant est un autre Claude Pet, la nouvelle instance se ferme au lieu
-d'afficher un second pet. Le port obtenu est publié dans `~/Library/Application Support/claude-pet/endpoint`
-(`<port> <pid>`), et c'est là que les hooks le lisent : il n'y a rien à reconfigurer.
+`scripts/bundle.sh` builds in release mode and wraps the binary in `build/ClaudePet.app` (no Dock icon). Move it to
+Applications if you want it to open at login.
 
-## Tester sans Claude
+Other scripts:
 
-```bash
-scripts/fake-event.sh demo
-```
-
-Autres commandes : `multi` (deux sessions en parallèle), `prompt`, `tool Edit`, `fail Bash`, `notify`, `stop`, `state`…
-Lance `scripts/fake-event.sh` sans argument pour la liste complète.
-
-`swift run ClaudePet --export-sprites sprites-export` écrit toutes les frames en PNG (×8).
-
-## Brancher Claude Code
-
-L'app s'en charge (écran d'accueil, puis Réglages › Claude Code). Le script Python fait la même chose en ligne de
-commande, pour le développement :
-
-```bash
-scripts/install-hooks.py install --dry-run   # montre le diff, n'écrit rien
-scripts/install-hooks.py install             # montre le diff, demande confirmation, sauvegarde, écrit
-scripts/install-hooks.py uninstall           # retire uniquement nos hooks
-```
-
-- L'installation fusionne dans `~/.claude/settings.json` sans toucher aux autres hooks (vibe-island, etc.). Nos entrées sont
-  repérées par le commentaire `# claude-pet-hook`, ce qui rend `install` idempotent et `uninstall` propre.
-- Avant d'écrire, elle copie le fichier dans `settings.json.claude-pet-backup-<date>` ; l'app garde en plus, une
-  seule fois, `settings.json.claude-pet-original`.
-- Les sessions Claude Code déjà ouvertes ne voient les nouveaux hooks qu'après redémarrage (ou via `/hooks`).
-
-Chaque hook lit le fichier `endpoint` et vérifie que le pet est vivant (`kill -0 <pid>`), deux commandes internes au
-shell qui ne lancent aucun processus. Ensuite seulement, il envoie le JSON stdin du hook avec
-`curl -m 1 --connect-timeout 0.2`, puis sort toujours avec 0. Pet fermé : 0 à 10 ms, sans `curl`.
-
-**Pourquoi un envoi synchrone et pas en arrière-plan ?** En arrière-plan, un gros `PostToolUse` (sortie d'un Read
-de plusieurs Mo) arrivait *après* le `PreToolUse` suivant, et le pet affichait le mauvais état. En synchrone, Claude
-Code attend la fin de chaque hook, donc l'ordre est garanti. Coût mesuré : ~10 ms par hook, ~30 ms pour 5 Mo,
-quasi nul si l'app est fermée (connexion refusée), 1 s au pire si l'app est bloquée.
-
-## Répondre à Claude depuis le pet
-
-Quand Claude demande une permission (lancer une commande, modifier un fichier…) ou te pose une question
-(`AskUserQuestion`), le pet te la montre et tu peux répondre sans retourner dans Claude.
-
-- **Encoche** : un bandeau « Claude a besoin de vous » sort sous l'encoche. Au survol, il s'ouvre en panneau autour
-  de l'encoche (à gauche, à droite et en dessous) avec la commande, le fichier ou la question, et les boutons. Le pet
-  reste à sa place, à droite.
-- **Flottant** : une pastille au-dessus du pet, qui s'ouvre en carte au survol ou au clic.
-- Une fois la demande ouverte, le bandeau ou la pastille ne revient pas : seul le pet reste en alerte (main levée,
-  « ! »). Survoler l'encoche, ou le pet en mode flottant, rouvre la demande. Une nouvelle demande refait apparaître
-  le bandeau.
-- Permission : **Autoriser** (une fois, jamais « toujours »), **Refuser** (Claude reçoit « Refusé par l'utilisateur
-  depuis Claude Pet. ») ou **Ignorer** (tu réponds dans Claude). Questions : un clic choisit (cases à cocher puis
-  **Valider** pour un choix multiple). **Autre** ouvre un champ pour taper ta propre réponse (Entrée pour valider) :
-  le pet prend le clavier seulement pendant la saisie. **Ignorer** laisse faire dans Claude.
-
-Claude Code affiche aussi son propre dialogue, questions comprises, et garde **la première réponse**, où qu'elle
-soit : pet, terminal, Desktop ou une autre app comme Vibe Island. La demande disparaît alors du pet. Pet fermé ou
-masqué : rien ne change, tout se passe dans Claude.
-
-## États
-
-| Événement hook | État |
+| Command | What it does |
 |---|---|
-| `SessionStart` | au repos |
-| `UserPromptSubmit`, `PreCompact`, `PostToolUse`, `SubagentStop` | réfléchit (bulle « … ») |
-| `PreToolUse` | travaille, icône selon l'outil : `>_` Bash, crayon Edit/Write, loupe Read/Grep/Glob, globe Web, deux blocs Task/Agent, engrenage pour le reste (MCP…) |
-| `SubagentStart` | travaille (agent) |
-| `PostToolUseFailure` | erreur pendant 3 s, puis réfléchit |
-| `StopFailure` | erreur pendant 3 s, puis au repos |
-| `PermissionRequest`, `Notification` (sauf `idle_prompt`) | t'attend (« ! » jaune) |
-| `Stop` | content (cœur) pendant 5 s, puis au repos |
-| `SessionEnd` | la session est oubliée |
-| au repos et aucun hook depuis 10 s | dort, image figée (aucune animation, quasiment aucun CPU) |
+| `swift run ClaudePet` | Runs the debug build (quit any running Claude Pet first) |
+| `scripts/make-dmg.sh` | Builds `build/ClaudePet.dmg`, with the drag-to-Applications window |
+| `scripts/fake-event.sh demo` | Plays fake Claude Code events, no Claude needed (`multi`, `stop`, `state`… without an argument for the list) |
+| `scripts/install-hooks.py install --dry-run` | The hook installer as a script, for development (shows the diff) |
+| `scripts/measure-cpu.sh` | Measures CPU and memory in each state |
+| `scripts/make-icon.sh` | Regenerates the app icon from the sprite |
 
-Garde-fous : un état « travaille » ou « réfléchit » sans événement depuis 10 min repasse au repos (un Échap
-n'envoie pas de `Stop`), et une session muette depuis 3 h est oubliée.
+The version comes from the latest `vX.Y.Z` git tag (or `VERSION=1.2.3 scripts/bundle.sh`).
 
-### Plusieurs sessions
+## How it works
 
-Le pet suit **la session dont l'état est le plus prioritaire** : t'attend > erreur > travaille > réfléchit > content >
-au repos. En cas d'égalité, c'est la plus récemment active qui gagne. Une session qui a besoin de toi n'est donc jamais
-masquée par une autre qui travaille. Le panneau de la barre des menus affiche le nombre de sessions suivies.
+```
+Claude Code ──hook──▶ curl POST 127.0.0.1:47319/event ──▶ Claude Pet ──▶ sprite
+```
 
-## Protocole (pour un futur mod)
+Each hook reads the port from `~/Library/Application Support/claude-pet/endpoint` and checks that the pet is running
+with shell built-ins only. When the pet is closed, no process is started and the hook exits at once. Otherwise it
+sends the hook's JSON with `curl -m 1` and always exits 0, so a stuck pet can never block Claude for more than a
+second. Permission requests are the exception: that hook waits for your answer in the pet, and Claude Code shows its
+own dialog at the same time.
 
-`POST http://127.0.0.1:47319/event` avec un objet JSON :
+The app is a Swift package with no dependencies (AppKit only). The sprites are drawn in code
+(`Sources/ClaudePet/Sprites.swift`).
 
-- le JSON du hook tel quel (`hook_event_name`, `session_id`, `tool_name`, `cwd`, `notification_type`…) ;
-- ou un forçage direct : `{"session_id": "...", "pet_state": "happy", "pet_tool": "bash", "pet_duration": 2}`.
-  `pet_state` prend `idle|thinking|working|error|waiting|happy|sleeping`, `pet_tool` prend `bash|edit|read|web|agent|other`,
-  et `pet_duration` (en secondes, facultatif) ramène ensuite la session au repos.
+### Local API
 
-`POST /control` règle l'app : `{"notch": true}` ou `{"notch": false}` (avec l'animation), `notch_radius` et
-`notch_ear` (rayons du cadre, en points).
+For scripts and mods, on `127.0.0.1:47319` (the port can change if it's taken, see the `endpoint` file):
 
-`GET /state` renvoie l'état agrégé, les sessions et `notch`, `GET /health` permet de vérifier que l'app tourne. Le serveur
-n'écoute que sur 127.0.0.1 et refuse les requêtes qui portent un en-tête `Origin` (pages web).
+- `POST /event`: a Claude Code hook's JSON as is, or a forced state:
+  `{"session_id": "x", "pet_state": "happy", "pet_tool": "bash", "pet_duration": 2}`
+  (`pet_state`: `idle|thinking|working|error|waiting|happy|sleeping`; `pet_tool`: `bash|edit|read|web|agent|other`).
+- `POST /control`: `{"notch": true}` moves the pet into the notch (`false` brings it out).
+- `GET /state`: current state and sessions. `GET /health`: is the app running.
 
-## Code
+## Contributing
 
-- `Sources/ClaudePet/PetState.swift` : états, correspondance hook → état, agrégation multi-sessions.
-- `Sources/ClaudePet/Sprites.swift` : sprites placeholder générés en code (grille 24×22). C'est ici qu'on branchera
-  de vrais assets.
-- `Sources/ClaudePet/Notch.swift` : géométrie de l'encoche, forme du cadre noir, ressorts.
-- `Sources/ClaudePet/PetWindow.swift` : NSPanel non activant, transparent, au-dessus de la barre des menus, sur tous
-  les Spaces et en plein écran. Modes flottant / encoche et vol entre les deux. Il laisse passer les clics partout sauf sur les pixels opaques du
-  sprite. La souris est suivie par événements quand elle est immobile, par relevés à 30 Hz quand elle bouge, sans
-  permission Accessibilité. `scripts/measure-cpu.sh` mesure le CPU et la mémoire par état.
-- `Sources/ClaudePet/EventServer.swift` : serveur HTTP minimal (Network.framework).
-- `Sources/ClaudePet/ControlPanel.swift` : panneau de la barre des menus, dessiné à la main.
-- `Sources/ClaudePet/SettingsWindow.swift`, `PanelKit.swift` : fenêtre de réglages et éléments dessinés partagés.
-- `Sources/ClaudePet/OnboardingWindow.swift` : écran du premier lancement.
-- `Sources/ClaudePet/HookSetup.swift` : installation, désinstallation et restauration des hooks, en Swift.
-- `Sources/ClaudePet/AppDelegate.swift` : câblage, menu du clic droit.
+Claude Pet is developed by one person, and that's how it will stay for now: **issues are welcome, pull requests
+aren't accepted.** Bug reports, ideas and feedback are the most useful help. The app has been tested on one MacBook
+with a notch, so reports from other setups (no notch, external displays, other macOS versions) help a lot.
 
-Pourquoi un Swift Package plutôt qu'un projet Xcode : il se compile avec `swift build` sans Xcode, il n'y a pas de
-fichier projet à maintenir, et `scripts/bundle.sh` suffit pour produire le `.app` (avec `LSUIElement`).
+## License
+
+Copyright © 2026 Thomas Lorenzini.
+
+Claude Pet is free software under the [GNU General Public License v3.0](LICENSE): you can use, study, modify and share
+it, as long as anything you distribute based on it stays under the GPL, with its source code and this copyright
+notice.

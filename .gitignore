@@ -3,3 +3,5 @@ build/
 .swiftpm/
 sprites-export/
 .DS_Store
+*.dmg
+CLAUDE.md
