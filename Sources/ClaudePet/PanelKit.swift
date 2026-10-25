@@ -325,8 +325,10 @@ final class CornerPicker: NSView {
 }
 
 final class FooterButton: NSView {
-    let title: String
+    var title: String { didSet { needsDisplay = true } }
     let shortcut: String
+    /// An accent dot before the title, for news (the update line).
+    var showsDot = false { didSet { needsDisplay = true } }
     var onClick: (() -> Void)?
     private var hovered = false { didSet { needsDisplay = true } }
 
@@ -343,7 +345,7 @@ final class FooterButton: NSView {
     override var fittingSize: NSSize {
         let w = title.attributed(.systemFont(ofSize: 12, weight: .medium), .black).size().width
             + shortcut.attributed(.systemFont(ofSize: 11), .black).size().width
-        return NSSize(width: ceil(w) + 26, height: 24)
+        return NSSize(width: ceil(w) + 26 + (showsDot ? 13 : 0), height: 24)
     }
 
     override func updateTrackingAreas() {
@@ -367,8 +369,14 @@ final class FooterButton: NSView {
         let label = title.attributed(.systemFont(ofSize: 12, weight: .medium), hovered ? theme.text : theme.secondary)
         let key = shortcut.attributed(.systemFont(ofSize: 11), theme.tertiary)
         let y = (bounds.height - label.size().height) / 2
-        label.draw(at: CGPoint(x: 9, y: y))
-        key.draw(at: CGPoint(x: 9 + label.size().width + 7, y: y + 1))
+        var x: CGFloat = 9
+        if showsDot {
+            theme.accent.setFill()
+            NSBezierPath(ovalIn: CGRect(x: x, y: 9, width: 6, height: 6)).fill()
+            x += 13
+        }
+        label.draw(at: CGPoint(x: x, y: y))
+        key.draw(at: CGPoint(x: x + label.size().width + 7, y: y + 1))
     }
 }
 

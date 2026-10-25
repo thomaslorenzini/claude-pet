@@ -183,6 +183,8 @@ final class ControlPanelView: NSView {
         var notch = false
         var notchAvailable = false
         var transitioning = false
+        /// The newer version on GitHub, nil when up to date (or not checked).
+        var update: String?
     }
 
     static let width: CGFloat = 320
@@ -194,25 +196,31 @@ final class ControlPanelView: NSView {
     var onQuit: (() -> Void)?
     var onToggleVisible: (() -> Void)?
     var onToggleNotch: (() -> Void)?
+    var onUpdate: (() -> Void)?
 
     let stage = PetStage()
     private let visibleRow = SettingRow(accessory: PanelToggle())
     private let notchRow = SettingRow(accessory: PanelToggle())
     private let settingsButton = FooterButton(title: tr("Réglages…", "Settings…"), shortcut: "⌘,")
     private let quitButton = FooterButton(title: tr("Quitter", "Quit"), shortcut: "⌘Q")
+    private let updateButton: FooterButton = {
+        let button = FooterButton(title: "", shortcut: "↗")
+        button.showsDot = true
+        return button
+    }()
 
-    // Layout, top to bottom: stage, usage title, rings and their labels, the quick settings card, a hairline,
-    // the footer.
+    // Layout, top to bottom: stage, usage title, rings and their labels, the quick settings card, the update
+    // line (only when there is one), a hairline, the footer.
     private static let stageRect = CGRect(x: pad, y: pad, width: width - 2 * pad, height: 112)
     private static let usageTitleY: CGFloat = stageRect.maxY + 18
     private static let ringsY: CGFloat = usageTitleY + 24
     private static let ringSize: CGFloat = 50
     private static let rowHeight: CGFloat = 48
     private static let cardRect = CGRect(x: pad, y: ringsY + ringSize + 50, width: width - 2 * pad, height: 2 * rowHeight)
-    private static let separatorY: CGFloat = cardRect.maxY + 12
-    private static let footerY: CGFloat = separatorY + 8
-    static let preferredHeight: CGFloat = footerY + 24 + 9
-    var preferredHeight: CGFloat { Self.preferredHeight }
+    private static let updateY: CGFloat = cardRect.maxY + 8
+    private var separatorY: CGFloat { Self.cardRect.maxY + (model.update == nil ? 12 : 8 + 24 + 8) }
+    private var footerY: CGFloat { separatorY + 8 }
+    var preferredHeight: CGFloat { footerY + 24 + 9 }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -221,11 +229,13 @@ final class ControlPanelView: NSView {
         addSubview(notchRow)
         addSubview(settingsButton)
         addSubview(quitButton)
+        addSubview(updateButton)
         stage.onPoke = { [weak self] in self?.onPoke?() }
         settingsButton.onClick = { [weak self] in self?.onSettings?() }
         visibleRow.onClick = { [weak self] in self?.onToggleVisible?() }
         notchRow.onClick = { [weak self] in self?.onToggleNotch?() }
         quitButton.onClick = { [weak self] in self?.onQuit?() }
+        updateButton.onClick = { [weak self] in self?.onUpdate?() }
         apply()
     }
 
@@ -245,6 +255,9 @@ final class ControlPanelView: NSView {
             : tr("Aucune encoche sur cet écran", "No notch on this screen")
         notchRow.isEnabled = model.notchAvailable && !model.transitioning
         (notchRow.accessory as! PanelToggle).isOn = model.notch
+        updateButton.isHidden = model.update == nil
+        updateButton.title = model.update.map { tr("Mise à jour disponible : v\($0)", "Update available: v\($0)") } ?? ""
+        needsLayout = true
         needsDisplay = true
     }
 
@@ -255,11 +268,15 @@ final class ControlPanelView: NSView {
         notchRow.frame = visibleRow.frame.offsetBy(dx: 0, dy: Self.rowHeight)
         // The footer buttons hang off the right edge, their hover plate aligned with the cards' edge.
         let quit = quitButton.fittingSize, settings = settingsButton.fittingSize
-        quitButton.frame = CGRect(x: bounds.width - Self.pad - quit.width + 6, y: Self.footerY, width: quit.width, height: quit.height)
-        settingsButton.frame = CGRect(x: quitButton.frame.minX - settings.width - 2, y: Self.footerY,
+        quitButton.frame = CGRect(x: bounds.width - Self.pad - quit.width + 6, y: footerY, width: quit.width, height: quit.height)
+        settingsButton.frame = CGRect(x: quitButton.frame.minX - settings.width - 2, y: footerY,
                                       width: settings.width, height: settings.height)
+        // Its dot and text line up with the server's in the footer.
+        let update = updateButton.fittingSize
+        updateButton.frame = CGRect(x: Self.pad - 7, y: Self.updateY, width: min(update.width, bounds.width - 2 * Self.pad + 7),
+                                    height: update.height)
         removeAllToolTips()
-        addToolTip(CGRect(x: 0, y: Self.footerY, width: settingsButton.frame.minX, height: 24), owner: self, userData: nil)
+        addToolTip(CGRect(x: 0, y: footerY, width: settingsButton.frame.minX, height: 24), owner: self, userData: nil)
     }
 
     @objc func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
@@ -297,14 +314,14 @@ final class ControlPanelView: NSView {
 
         // Hairline over the footer, full width like a menu's separator.
         theme.stroke.setFill()
-        CGRect(x: pad, y: Self.separatorY - 0.5, width: inner, height: 1).fill()
+        CGRect(x: pad, y: separatorY - 0.5, width: inner, height: 1).fill()
 
         // Footer: is the hooks' server listening?
-        let dot = CGRect(x: pad + 2, y: Self.footerY + 9, width: 6, height: 6)
+        let dot = CGRect(x: pad + 2, y: footerY + 9, width: 6, height: 6)
         (model.serverOK ? PanelTheme.gaugeColors[2] : PanelTheme.danger).setFill()
         NSBezierPath(ovalIn: dot).fill()
         let server = model.server.attributed(.systemFont(ofSize: 11), theme.tertiary)
-        server.draw(at: CGPoint(x: dot.maxX + 7, y: Self.footerY + 5), width: settingsButton.frame.minX - dot.maxX - 12)
+        server.draw(at: CGPoint(x: dot.maxX + 7, y: footerY + 5), width: settingsButton.frame.minX - dot.maxX - 12)
     }
 
     private func sectionTitle(_ title: String, y: CGFloat, theme: PanelTheme) {
@@ -359,6 +376,7 @@ final class ControlPanelView: NSView {
         case "quit": onQuit?()
         case "visible": onToggleVisible?()
         case "notch": onToggleNotch?()
+        case "update": if model.update != nil { onUpdate?() }
         default: break
         }
     }

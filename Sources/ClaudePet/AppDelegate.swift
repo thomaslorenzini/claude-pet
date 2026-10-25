@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let tracker = SessionTracker()
     private let quotas = QuotaStore()
     private let usageAPI = OAuthUsageSource()
+    private let updates = UpdateChecker()
     private let requests = RequestCenter()
     private var pet: PetController!
     private var server: EventServer!
@@ -170,6 +171,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.refresh()
         }
         usageAPI.start()
+        updates.onChange = { [unowned self] in self.refresh() }
+        updates.start()
 
         server.onAsk = { [unowned self] payload, respond in
             // The permission hook is the blocking one now: it also tells the tracker Claude waits.
@@ -196,6 +199,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let ear = (control["notch_ear"] as? Double).map { CGFloat($0) }
             if radius != nil || ear != nil { self.pet.tuneNotch(radius: radius, ear: ear) }
             if control["renew_usage_token"] as? Bool == true { self.usageAPI.renewNow() }
+            // Tests: checks GitHub now, or pretends it answered this version ("" forgets it).
+            if control["check_updates"] as? Bool == true { self.updates.checkNow() }
+            if let latest = control["fake_latest"] as? String { self.updates.fake(latest: latest) }
             // Tests: open or close the request panel as a hover would.
             if let reveal = control["reveal"] as? Bool { self.pet.revealRequest(reveal) }
             // Tests: renders the pet's windows to PNG, even with the display asleep.
@@ -247,6 +253,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot["notch_radius"] = Double(NotchGeometry.bottomRadius)
             snapshot["notch_ear"] = Double(NotchGeometry.earRadius)
             snapshot["tutorial"] = self.tutorial?.stateName ?? NSNull()
+            snapshot["update"] = self.updates.state.name
+            snapshot["current_version"] = self.updates.currentVersion ?? NSNull()
+            snapshot["latest_version"] = self.updates.latestVersion ?? NSNull()
+            snapshot["update_last_check"] = self.updates.lastCheck.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
             return snapshot
         }
         server.onStatusChange = { [unowned self] status in
@@ -335,6 +345,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.view.onQuit = { NSApp.terminate(nil) }
         panel.view.onToggleVisible = { [unowned self] in self.toggleVisible() }
         panel.view.onToggleNotch = { [unowned self] in self.toggleNotch() }
+        panel.view.onUpdate = { [unowned self] in
+            self.panel.close()
+            self.updates.openPage()
+        }
     }
 
     // Shared by the panel and the settings window.
@@ -379,6 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.notch = pet.wantsNotch
         m.notchAvailable = pet.notchAvailable
         m.transitioning = pet.isTransitioning
+        if case .available(let version, _) = updates.state { m.update = version }
         return m
     }
 
@@ -424,6 +439,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             OAuthUsageSource.isEnabled ? self.usageAPI.start() : self.usageAPI.stop()
             self.settings.refresh()
         }
+        view.onToggleUpdates = { [unowned self] in
+            UpdateChecker.isEnabled.toggle()
+            UpdateChecker.isEnabled ? self.updates.start(soon: true) : self.updates.stop()
+            self.settings.refresh()
+        }
+        view.onOpenUpdate = { [unowned self] in self.updates.openPage() }
         view.onToggleLogin = { [unowned self] in
             self.loginMessage = LoginItem.set(LoginItem.state != .on)
             self.settings.refresh()
@@ -489,6 +510,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.usageAPI = OAuthUsageSource.isEnabled
         m.usageStatus = usageLine()
         m.usageHealthy = OAuthUsageSource.isEnabled ? usageAPI.isUpToDate : nil
+        m.update = updates.state
+        m.updateCurrent = updates.currentVersion
+        m.updateLastCheck = updates.lastCheck
         m.hooks = hookStatus
         m.settingsPath = (HookSetup.standard.settingsURL.path as NSString).abbreviatingWithTildeInPath
         m.hookMessage = hookMessage?.text
@@ -556,6 +580,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(submenu: size, title: tr("Taille", "Size"))
 
         menu.addItem(.separator())
+        if case .available(let version, _) = updates.state {
+            menu.addItem(action: tr("Mise à jour disponible : v\(version)…", "Update available: v\(version)…")) { [unowned self] in
+                self.updates.openPage()
+            }
+        }
         menu.addItem(action: tr("Réglages…", "Settings…"), key: ",") { [unowned self] in self.openSettings() }
         menu.addItem(action: tr("Quitter Claude Pet", "Quit Claude Pet"), key: "q") { NSApp.terminate(nil) }
         return menu

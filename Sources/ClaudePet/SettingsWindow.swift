@@ -115,6 +115,9 @@ final class SettingsView: NSView {
         var usageStatus = ""
         /// Nil while the source is off.
         var usageHealthy: Bool?
+        var update = UpdateChecker.State.notChecked
+        var updateCurrent: String?
+        var updateLastCheck: Date?
         var hooks: HookSetup.Status?
         var settingsPath = ""
         /// Outcome of the last install or uninstall.
@@ -138,6 +141,8 @@ final class SettingsView: NSView {
     var onToggleNotch: (() -> Void)?
     var onToggleLogin: (() -> Void)?
     var onToggleUsageAPI: (() -> Void)?
+    var onToggleUpdates: (() -> Void)?
+    var onOpenUpdate: (() -> Void)?
     var onScale: ((Int) -> Void)?
     var onCorner: ((PetController.Corner) -> Void)?
     var onInstall: (() -> Void)?
@@ -150,11 +155,18 @@ final class SettingsView: NSView {
     private let positionRow = SettingRow(accessory: CornerPicker())
     private let loginRow = SettingRow(accessory: PanelToggle())
     private let usageRow = SettingRow(accessory: PanelToggle())
+    private let updateRow = SettingRow(accessory: PanelToggle())
+    /// Only while a newer version exists: its button opens the release page.
+    private let releaseRow = SettingRow(accessory: PanelPillButton(title: "", style: .primary))
     private let installButton = PanelPillButton(title: "", style: .primary)
     private let uninstallButton = PanelPillButton(title: "", style: .secondary)
     private let restoreOriginalButton = PanelPillButton(title: "", style: .secondary)
     private let restoreLatestButton = PanelPillButton(title: "", style: .secondary)
     private var petRows: [SettingRow] { [visibleRow, notchRow, sizeRow, positionRow, loginRow] }
+    private var dataRows: [SettingRow] {
+        if case .available = model.update { return [usageRow, updateRow, releaseRow] }
+        return [usageRow, updateRow]
+    }
     private let petIcon = SpriteComposer.frame(state: .idle, tool: nil, t: 0, bubble: false)
 
     /// Destructive actions ask twice: the first click arms them for a few seconds, one at a time.
@@ -165,12 +177,15 @@ final class SettingsView: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        (petRows + [usageRow]).forEach(addSubview)
+        (petRows + [usageRow, updateRow, releaseRow]).forEach(addSubview)
         [installButton, uninstallButton, restoreOriginalButton, restoreLatestButton].forEach(addSubview)
         visibleRow.onClick = { [weak self] in self?.onToggleVisible?() }
         notchRow.onClick = { [weak self] in self?.onToggleNotch?() }
         loginRow.onClick = { [weak self] in self?.onToggleLogin?() }
         usageRow.onClick = { [weak self] in self?.onToggleUsageAPI?() }
+        updateRow.onClick = { [weak self] in self?.onToggleUpdates?() }
+        releaseRow.onClick = { [weak self] in self?.onOpenUpdate?() }
+        (releaseRow.accessory as! PanelPillButton).onClick = { [weak self] in self?.onOpenUpdate?() }
         (sizeRow.accessory as! SizePicker).onPick = { [weak self] in self?.onScale?($0) }
         (positionRow.accessory as! CornerPicker).onPick = { [weak self] in self?.onCorner?($0) }
         installButton.onClick = { [weak self] in
@@ -195,7 +210,7 @@ final class SettingsView: NSView {
     private struct Layout {
         var headerY: CGFloat = 0
         var petTitleY: CGFloat = 0, petCardY: CGFloat = 0, petCardHeight: CGFloat = 0
-        var dataTitleY: CGFloat = 0, dataCardY: CGFloat = 0
+        var dataTitleY: CGFloat = 0, dataCardY: CGFloat = 0, dataCardHeight: CGFloat = 0
         var hooksTitleY: CGFloat = 0, hooksCardY: CGFloat = 0
         var actionsY: CGFloat = 0, messageY: CGFloat = 0, messageHeight: CGFloat = 0
         var hooksCardHeight: CGFloat = 0
@@ -220,7 +235,8 @@ final class SettingsView: NSView {
         l.petCardHeight = petRows.map(\.rowHeight).reduce(0, +)
         l.dataTitleY = l.petCardY + l.petCardHeight + 24
         l.dataCardY = l.dataTitleY + 22
-        l.hooksTitleY = l.dataCardY + usageRow.rowHeight + 24
+        l.dataCardHeight = dataRows.map(\.rowHeight).reduce(0, +)
+        l.hooksTitleY = l.dataCardY + l.dataCardHeight + 24
         l.hooksCardY = l.hooksTitleY + 22
         l.actionsY = l.hooksCardY + Self.statusBlockHeight
         l.messageY = l.actionsY + 12 + 28 + 10
@@ -250,7 +266,12 @@ final class SettingsView: NSView {
             row.frame = CGRect(x: pad, y: y, width: inner, height: row.rowHeight)
             y += row.rowHeight
         }
-        usageRow.frame = CGRect(x: pad, y: l.dataCardY, width: inner, height: usageRow.rowHeight)
+        y = l.dataCardY
+        for row in dataRows {
+            row.frame = CGRect(x: pad, y: y, width: inner, height: row.rowHeight)
+            y += row.rowHeight
+        }
+        releaseRow.isHidden = !dataRows.contains(releaseRow)
 
         let install = installButton.fittingSize
         installButton.frame = CGRect(x: pad + 12, y: l.actionsY + 12, width: max(104, install.width), height: install.height)
@@ -319,6 +340,16 @@ final class SettingsView: NSView {
         usageRow.subtitle = tr("Lus via Claude Code, toutes les 5 min · accès au Trousseau", "Read through Claude Code, every 5 min · Keychain access")
         (usageRow.accessory as! PanelToggle).isOn = m.usageAPI
 
+        updateRow.title = tr("Vérifier les mises à jour", "Check for updates")
+        updateRow.subtitle = updateSubtitle()
+        updateRow.isEnabled = m.update != .unavailable
+        (updateRow.accessory as! PanelToggle).isOn = m.update != .off && m.update != .unavailable
+        if case .available(let version, _) = m.update {
+            releaseRow.title = tr("Version \(version) disponible", "Version \(version) available")
+            releaseRow.subtitle = tr("Ouvre sa page sur GitHub : rien n'est téléchargé tout seul", "Opens its page on GitHub: nothing downloads by itself")
+            (releaseRow.accessory as! PanelPillButton).title = tr("Voir sur GitHub", "View on GitHub")
+        }
+
         switch hookState {
         case .complete: installButton.title = tr("Réinstaller", "Reinstall")
         case .outdated: installButton.title = tr("Mettre à jour", "Update")
@@ -334,6 +365,22 @@ final class SettingsView: NSView {
 
         needsLayout = true
         needsDisplay = true
+    }
+
+    private func updateSubtitle() -> String {
+        let m = model
+        let checked = m.updateLastCheck.map { tr(" · vérifié il y a \(QuotaStore.duration($0, Date()))", " · checked \(QuotaStore.duration($0, Date())) ago") } ?? ""
+        let current = m.updateCurrent ?? "?"
+        switch m.update {
+        case .off: return tr("Désactivée : aucune requête vers GitHub", "Off: no requests to GitHub")
+        case .unavailable: return tr("Seulement pour l'app installée", "Only for the installed app")
+        case .notChecked: return tr("Une fois par jour, sur GitHub · pas encore vérifié", "Once a day, on GitHub · not checked yet")
+        case .checking: return tr("Vérification sur GitHub…", "Checking on GitHub…")
+        case .upToDate: return tr("À jour (v\(current))", "Up to date (v\(current))") + checked
+        // The row below says which version is out.
+        case .available: return tr("Tu as la v\(current)", "You have v\(current)") + checked
+        case .failed(let message): return tr("Échec : \(message) · nouvel essai demain", "Failed: \(message) · retrying tomorrow")
+        }
     }
 
     private func button(for action: Confirmable) -> PanelPillButton {
@@ -401,6 +448,8 @@ final class SettingsView: NSView {
         case "visible": onToggleVisible?()
         case "notch": if notchRow.isEnabled { onToggleNotch?() }
         case "usage": onToggleUsageAPI?()
+        case "updates": if updateRow.isEnabled { onToggleUpdates?() }
+        case "update_open": if !releaseRow.isHidden { onOpenUpdate?() }
         case "login": if loginRow.isEnabled { onToggleLogin?() }
         case "reinstall", "install": installButton.press()
         // First click arms the confirmation, a second one (or "confirm_uninstall") goes through.
@@ -504,7 +553,12 @@ final class SettingsView: NSView {
 
         // Data.
         sectionTitle(tr("Données", "Data"), y: l.dataTitleY, theme: theme)
-        drawCard(CGRect(x: pad, y: l.dataCardY, width: inner, height: usageRow.rowHeight), theme: theme)
+        drawCard(CGRect(x: pad, y: l.dataCardY, width: inner, height: l.dataCardHeight), theme: theme)
+        y = l.dataCardY
+        for row in dataRows.dropLast() {
+            y += row.rowHeight
+            hairline(y, theme: theme)
+        }
         // The source's state, at the right of the section title, as in the menu bar panel.
         let usage = model.usageStatus.attributed(.systemFont(ofSize: 11), theme.tertiary)
         let usageWidth = min(usage.size().width + 1, inner - 120)

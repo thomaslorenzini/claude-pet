@@ -98,6 +98,10 @@ These figures come from my MacBook (Apple M4); expect a bit more on older Macs. 
   This endpoint is not an official API and may stop working at any time.
 - Without quotas turned on, the gauges still fill in from your status line (CLI sessions) and the session
   transcript (context only).
+- **Update check.** Once a day, the app asks GitHub's public API which version is the latest release, only to show
+  "Update available" in the menu bar panel and the settings. No account is involved and nothing about you is sent
+  beyond what any web request carries (your IP address and the app's version in the User-Agent). It never downloads
+  or installs anything: the button opens the release page in your browser. Turn it off in **Settings › Data**.
 
 ## Uninstall
 
