@@ -16,12 +16,17 @@ final class UpdateChecker: NSObject, URLSessionTaskDelegate {
     private static let lastCheckKey = "updateLastCheck"
     private static let latestVersionKey = "updateLatestVersion"
     private static let latestURLKey = "updateLatestURL"
+    private static let lastRequestKey = "updateLastRequest"
+    private static let blockedUntilKey = "updateBlockedUntil"
 
     private static let apiURL = URL(string: "https://api.github.com/repos/thomaslorenzini/claude-pet/releases/latest")!
     private static let pagePrefix = "https://github.com/thomaslorenzini/claude-pet/"
     static let releasesPage = URL(string: "https://github.com/thomaslorenzini/claude-pet/releases/latest")!
     private static let interval: TimeInterval = 24 * 3600
     private static let launchDelay: TimeInterval = 60
+    /// "Check now" waits this long after any request: at most 30 an hour, half of GitHub's 60 per hour
+    /// without an account (a limit shared with everything else on the same IP address).
+    static let manualCooldown: TimeInterval = 120
 
     enum State: Equatable {
         /// Turned off in the settings.
@@ -58,6 +63,8 @@ final class UpdateChecker: NSObject, URLSessionTaskDelegate {
     /// `POST /control {"fake_latest": "9.9.9"}`: pretends GitHub answered this, in memory only.
     private var fakeLatest: String?
     private var timer: Timer?
+    /// Fires once when "Check now" becomes possible again, so an open settings window enables its button.
+    private var cooldownTimer: Timer?
     private var wakeObserver: Any?
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
@@ -107,16 +114,44 @@ final class UpdateChecker: NSObject, URLSessionTaskDelegate {
     func stop() {
         timer?.invalidate()
         timer = nil
+        cooldownTimer?.invalidate()
+        cooldownTimer = nil
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         wakeObserver = nil
         lastError = nil
         onChange?()
     }
 
-    /// `POST /control {"check_updates": true}`: checks now, whatever the saved date.
+    /// `POST /control {"check_updates": true}`: checks now, whatever the saved date (tests only).
     func checkNow() {
         guard Self.isEnabled, currentVersion != nil else { return }
         fetch()
+    }
+
+    /// When "Check now" can be used again: two minutes after the last request, or later if GitHub
+    /// rate-limited us. Nil when it can be used now.
+    var manualCheckAvailableAt: Date? {
+        let defaults = UserDefaults.standard
+        let afterLast = (defaults.object(forKey: Self.lastRequestKey) as? Date)?.addingTimeInterval(Self.manualCooldown)
+        let blocked = defaults.object(forKey: Self.blockedUntilKey) as? Date
+        guard let at = [afterLast, blocked].compactMap({ $0 }).max(), at > Date() else { return nil }
+        // A clock set back must not lock the button for long.
+        return min(at, Date().addingTimeInterval(max(Self.manualCooldown, blocked?.timeIntervalSinceNow ?? 0)))
+    }
+
+    /// The "Check now" button: a real request, rate-limited (see `manualCooldown`).
+    func checkManually() {
+        guard Self.isEnabled, currentVersion != nil, !checking, manualCheckAvailableAt == nil else { return }
+        fetch()
+    }
+
+    private func armCooldownTimer() {
+        cooldownTimer?.invalidate()
+        guard let at = manualCheckAvailableAt else { return }
+        let timer = Timer(timeInterval: max(1, at.timeIntervalSinceNow), repeats: false) { [weak self] _ in self?.onChange?() }
+        timer.tolerance = 1
+        RunLoop.main.add(timer, forMode: .common)
+        cooldownTimer = timer
     }
 
     /// Tests: "" goes back to what GitHub said last.
@@ -157,6 +192,7 @@ final class UpdateChecker: NSObject, URLSessionTaskDelegate {
         guard Self.isEnabled, let current = currentVersion, !checking else { return }
         checking = true
         setNextCheck(after: Self.interval)
+        UserDefaults.standard.set(Date(), forKey: Self.lastRequestKey)
         onChange?()
         var request = URLRequest(url: Self.apiURL)
         request.httpMethod = "GET"
@@ -169,7 +205,10 @@ final class UpdateChecker: NSObject, URLSessionTaskDelegate {
 
     private func handle(data: Data?, response: HTTPURLResponse?) {
         checking = false
-        defer { onChange?() }
+        defer {
+            armCooldownTimer()
+            onChange?()
+        }
         guard let response else {
             return fail(tr("réseau indisponible", "network unavailable"))
         }
@@ -193,6 +232,8 @@ final class UpdateChecker: NSObject, URLSessionTaskDelegate {
             }
             let wait = header("retry-after") ?? header("x-ratelimit-reset").map { $0 - Date().timeIntervalSince1970 } ?? 0
             if wait > Self.interval { setNextCheck(after: wait) }
+            // "Check now" stays off until GitHub accepts requests again (an hour at most without headers).
+            UserDefaults.standard.set(Date().addingTimeInterval(min(max(wait, Self.manualCooldown), 3600)), forKey: Self.blockedUntilKey)
             fail(tr("GitHub limite les requêtes", "rate limited by GitHub"))
         default:
             fail(tr("erreur HTTP", "HTTP error") + " \(response.statusCode)")

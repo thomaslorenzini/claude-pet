@@ -118,6 +118,8 @@ final class SettingsView: NSView {
         var update = UpdateChecker.State.notChecked
         var updateCurrent: String?
         var updateLastCheck: Date?
+        /// When "Check now" can be used again; nil when it can be used now.
+        var updateManualAt: Date?
         var hooks: HookSetup.Status?
         var settingsPath = ""
         /// Outcome of the last install or uninstall.
@@ -143,6 +145,7 @@ final class SettingsView: NSView {
     var onToggleUsageAPI: (() -> Void)?
     var onToggleUpdates: (() -> Void)?
     var onOpenUpdate: (() -> Void)?
+    var onCheckUpdatesNow: (() -> Void)?
     var onScale: ((Int) -> Void)?
     var onCorner: ((PetController.Corner) -> Void)?
     var onInstall: (() -> Void)?
@@ -156,7 +159,7 @@ final class SettingsView: NSView {
     private let loginRow = SettingRow(accessory: PanelToggle())
     private let usageRow = SettingRow(accessory: PanelToggle())
     private let updateRow = SettingRow(accessory: PanelToggle())
-    /// Only while a newer version exists: its button opens the release page.
+    /// While the check is on: "Check now", or, once a newer version exists, a button to its release page.
     private let releaseRow = SettingRow(accessory: PanelPillButton(title: "", style: .primary))
     private let installButton = PanelPillButton(title: "", style: .primary)
     private let uninstallButton = PanelPillButton(title: "", style: .secondary)
@@ -164,8 +167,10 @@ final class SettingsView: NSView {
     private let restoreLatestButton = PanelPillButton(title: "", style: .secondary)
     private var petRows: [SettingRow] { [visibleRow, notchRow, sizeRow, positionRow, loginRow] }
     private var dataRows: [SettingRow] {
-        if case .available = model.update { return [usageRow, updateRow, releaseRow] }
-        return [usageRow, updateRow]
+        switch model.update {
+        case .off, .unavailable: return [usageRow, updateRow]
+        default: return [usageRow, updateRow, releaseRow]
+        }
     }
     private let petIcon = SpriteComposer.frame(state: .idle, tool: nil, t: 0, bubble: false)
 
@@ -184,8 +189,8 @@ final class SettingsView: NSView {
         loginRow.onClick = { [weak self] in self?.onToggleLogin?() }
         usageRow.onClick = { [weak self] in self?.onToggleUsageAPI?() }
         updateRow.onClick = { [weak self] in self?.onToggleUpdates?() }
-        releaseRow.onClick = { [weak self] in self?.onOpenUpdate?() }
-        (releaseRow.accessory as! PanelPillButton).onClick = { [weak self] in self?.onOpenUpdate?() }
+        releaseRow.onClick = { [weak self] in self?.releaseAction() }
+        (releaseRow.accessory as! PanelPillButton).onClick = { [weak self] in self?.releaseAction() }
         (sizeRow.accessory as! SizePicker).onPick = { [weak self] in self?.onScale?($0) }
         (positionRow.accessory as! CornerPicker).onPick = { [weak self] in self?.onCorner?($0) }
         installButton.onClick = { [weak self] in
@@ -344,10 +349,27 @@ final class SettingsView: NSView {
         updateRow.subtitle = updateSubtitle()
         updateRow.isEnabled = m.update != .unavailable
         (updateRow.accessory as! PanelToggle).isOn = m.update != .off && m.update != .unavailable
+        let releaseButton = releaseRow.accessory as! PanelPillButton
         if case .available(let version, _) = m.update {
             releaseRow.title = tr("Version \(version) disponible", "Version \(version) available")
             releaseRow.subtitle = tr("Ouvre sa page sur GitHub : rien n'est téléchargé tout seul", "Opens its page on GitHub: nothing downloads by itself")
-            (releaseRow.accessory as! PanelPillButton).title = tr("Voir sur GitHub", "View on GitHub")
+            releaseButton.title = tr("Voir sur GitHub", "View on GitHub")
+            releaseButton.style = .primary
+            releaseButton.isEnabled = true
+        } else {
+            releaseRow.title = tr("Vérifier maintenant", "Check now")
+            if m.update == .checking {
+                releaseRow.subtitle = tr("Demande en cours à GitHub", "Asking GitHub")
+            } else if let at = m.updateManualAt {
+                // Rounded up: "in 1 min" while nearly two are left would be a lie.
+                let minutes = max(1, Int((at.timeIntervalSinceNow / 60).rounded(.up)))
+                releaseRow.subtitle = tr("De nouveau possible dans \(minutes) min, pour ménager GitHub", "Available again in \(minutes) min, to go easy on GitHub")
+            } else {
+                releaseRow.subtitle = tr("Sans attendre la vérification du jour", "Without waiting for the daily check")
+            }
+            releaseButton.title = m.update == .checking ? tr("Vérification…", "Checking…") : tr("Vérifier", "Check")
+            releaseButton.style = .secondary
+            releaseButton.isEnabled = m.update != .checking && m.updateManualAt == nil
         }
 
         switch hookState {
@@ -369,7 +391,11 @@ final class SettingsView: NSView {
 
     private func updateSubtitle() -> String {
         let m = model
-        let checked = m.updateLastCheck.map { tr(" · vérifié il y a \(QuotaStore.duration($0, Date()))", " · checked \(QuotaStore.duration($0, Date())) ago") } ?? ""
+        let checked = m.updateLastCheck.map {
+            Date().timeIntervalSince($0) < 60
+                ? tr(" · vérifié à l'instant", " · checked just now")
+                : tr(" · vérifié il y a \(QuotaStore.duration($0, Date()))", " · checked \(QuotaStore.duration($0, Date())) ago")
+        } ?? ""
         let current = m.updateCurrent ?? "?"
         switch m.update {
         case .off: return tr("Désactivée : aucune requête vers GitHub", "Off: no requests to GitHub")
@@ -442,6 +468,16 @@ final class SettingsView: NSView {
         needsDisplay = true
     }
 
+    /// The release row's button: open the newer version's page, or check now if that's allowed yet.
+    private func releaseAction() {
+        if case .available = model.update {
+            onOpenUpdate?()
+            return
+        }
+        guard model.update != .checking, model.updateManualAt == nil else { return }
+        onCheckUpdatesNow?()
+    }
+
     /// Tests: the controls by name, as clicks would.
     func press(_ name: String) {
         switch name {
@@ -449,7 +485,7 @@ final class SettingsView: NSView {
         case "notch": if notchRow.isEnabled { onToggleNotch?() }
         case "usage": onToggleUsageAPI?()
         case "updates": if updateRow.isEnabled { onToggleUpdates?() }
-        case "update_open": if !releaseRow.isHidden { onOpenUpdate?() }
+        case "update_open", "update_check": if !releaseRow.isHidden { releaseAction() }
         case "login": if loginRow.isEnabled { onToggleLogin?() }
         case "reinstall", "install": installButton.press()
         // First click arms the confirmation, a second one (or "confirm_uninstall") goes through.

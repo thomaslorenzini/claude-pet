@@ -257,6 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot["current_version"] = self.updates.currentVersion ?? NSNull()
             snapshot["latest_version"] = self.updates.latestVersion ?? NSNull()
             snapshot["update_last_check"] = self.updates.lastCheck.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
+            snapshot["update_manual_at"] = self.updates.manualCheckAvailableAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
             return snapshot
         }
         server.onStatusChange = { [unowned self] status in
@@ -445,6 +446,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.settings.refresh()
         }
         view.onOpenUpdate = { [unowned self] in self.updates.openPage() }
+        view.onCheckUpdatesNow = { [unowned self] in self.updates.checkManually() }
         view.onToggleLogin = { [unowned self] in
             self.loginMessage = LoginItem.set(LoginItem.state != .on)
             self.settings.refresh()
@@ -513,6 +515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.update = updates.state
         m.updateCurrent = updates.currentVersion
         m.updateLastCheck = updates.lastCheck
+        m.updateManualAt = updates.manualCheckAvailableAt
         m.hooks = hookStatus
         m.settingsPath = (HookSetup.standard.settingsURL.path as NSString).abbreviatingWithTildeInPath
         m.hookMessage = hookMessage?.text
