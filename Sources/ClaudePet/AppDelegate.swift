@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let panel = ControlPanel()
     private let settings = SettingsController()
+    private let stats = StatsController(ledger: .shared)
     /// Read when the settings window comes forward and after each action, not on every refresh.
     private var hookStatus: HookSetup.Status?
     private var hookBackups: (original: HookSetup.Backup?, latest: HookSetup.Backup?)
@@ -304,6 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Tests: opens the menu bar panel, renders it, presses one of its controls.
             if let open = control["panel"] as? Bool, let button = self.statusItem.button {
                 open ? self.panel.open(from: button) : self.panel.close()
+                if open { self.readTokens() }
             }
             if let path = control["panel_snapshot"] as? String { self.panel.snapshot(to: path) }
             if let name = control["panel_press"] as? String { self.panel.view.press(name) }
@@ -322,6 +324,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let path = control["settings_snapshot"] as? String { self.settings.snapshot(to: path) }
             if let y = control["settings_scroll"] as? Double { self.settings.scroll(to: CGFloat(y)) }
             if let path = control["settings_window_snapshot"] as? String { self.settings.windowSnapshot(to: path) }
+            // Tests: the statistics window, the same way; a hover at {"x", "y"} from its top-left corner.
+            if let open = control["stats"] as? Bool { open ? self.openStats() : self.stats.close() }
+            if let look = control["stats_appearance"] as? String {
+                self.stats.window.appearance = look.isEmpty ? nil : NSAppearance(named: look == "dark" ? .darkAqua : .aqua)
+                Self.redraw(self.stats.view)
+            }
+            if let names = control["stats_press"] as? String {
+                names.split(separator: ",").forEach { self.stats.view.press(String($0)) }
+                self.stats.recompute(animated: false)
+            }
+            if let point = control["stats_hover"] as? [String: Double] {
+                self.stats.view.hover(at: point.isEmpty ? nil : CGPoint(x: point["x"] ?? 0, y: point["y"] ?? 0))
+            }
+            if let size = control["stats_size"] as? [String: Double], let w = size["w"], let h = size["h"] {
+                var frame = self.stats.window.frame
+                frame.origin.y += frame.height - h
+                frame.size = CGSize(width: w, height: h)
+                self.stats.window.setFrame(frame, display: true)
+            }
+            if let path = control["stats_snapshot"] as? String { self.stats.snapshot(to: path) }
             // Tests: the first-run tutorial, whether it was already seen or not.
             if let on = control["tutorial"] as? Bool { on ? self.startTutorial() : self.tutorial?.stop() }
             if control["tutorial_skip"] as? Bool == true { self.tutorial?.skip() }
@@ -357,6 +379,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot["notch_radius"] = Double(NotchGeometry.bottomRadius)
             snapshot["notch_ear"] = Double(NotchGeometry.earRadius)
             snapshot["tutorial"] = self.tutorial?.stateName ?? NSNull()
+            snapshot["stats"] = self.stats.isOpen
+            snapshot["stats_responses"] = TokenLedger.shared.isLoaded ? TokenLedger.shared.entries.count : NSNull()
             snapshot["update"] = self.updates.state.name
             snapshot["current_version"] = self.updates.currentVersion ?? NSNull()
             snapshot["latest_version"] = self.updates.latestVersion ?? NSNull()
@@ -410,6 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         Endpoint.unpublish()
+        TokenLedger.shared.flush(wait: true)
     }
 
     private func refresh() {
@@ -447,6 +472,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func statusItemClicked() {
         guard let button = statusItem.button else { return }
         panel.toggle(from: button)
+        if panel.isOpen { readTokens() }
     }
 
     private func setUpPanel() {
@@ -457,6 +483,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.view.onQuit = { NSApp.terminate(nil) }
         panel.view.onToggleVisible = { [unowned self] in self.toggleVisible() }
         panel.view.onToggleNotch = { [unowned self] in self.toggleNotch() }
+        panel.view.onStats = { [unowned self] in self.openStats() }
         panel.view.onUpdate = { [unowned self] in
             self.panel.close()
             self.updates.install()
@@ -506,7 +533,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.notchAvailable = pet.notchAvailable
         m.transitioning = pet.isTransitioning
         m.update = updateLine
+        if TokenLedger.shared.isLoaded {
+            let today = StatsSummary(entries: TokenLedger.shared.entries, query: StatsQuery(period: .today))
+            m.statsToday = StatsFormat.compact(Double(today.total)) + " tokens"
+        }
         return m
+    }
+
+    // MARK: Statistics window
+
+    /// The panel's statistics row shows today's tokens: read what Claude Code wrote since last time.
+    private func readTokens() {
+        TokenLedger.shared.refresh { [weak self] in self?.panel.refresh() }
+    }
+
+    private func openStats() {
+        panel.close()
+        stats.open()
     }
 
     private func usageLine() -> String {
@@ -719,7 +762,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 /// Closure-backed menu items, to keep the menu code declarative.
-private final class ClosureMenuItem: NSMenuItem {
+final class ClosureMenuItem: NSMenuItem {
     private let handler: () -> Void
 
     init(title: String, key: String, handler: @escaping () -> Void) {

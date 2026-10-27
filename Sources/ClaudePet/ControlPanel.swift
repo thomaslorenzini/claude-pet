@@ -185,6 +185,8 @@ final class ControlPanelView: NSView {
         var transitioning = false
         /// The update line ("Restart to update to vX"…), nil when there is nothing to install.
         var update: String?
+        /// Today's tokens for the statistics row, once the transcripts were read.
+        var statsToday: String?
     }
 
     static let width: CGFloat = 320
@@ -197,10 +199,12 @@ final class ControlPanelView: NSView {
     var onToggleVisible: (() -> Void)?
     var onToggleNotch: (() -> Void)?
     var onUpdate: (() -> Void)?
+    var onStats: (() -> Void)?
 
     let stage = PetStage()
     private let visibleRow = SettingRow(accessory: PanelToggle())
     private let notchRow = SettingRow(accessory: PanelToggle())
+    private let statsRow = SettingRow(accessory: ChevronAccessory())
     private let settingsButton = FooterButton(title: tr("Réglages…", "Settings…"), shortcut: "⌘,")
     private let quitButton = FooterButton(title: tr("Quitter", "Quit"), shortcut: "⌘Q")
     private let updateButton: FooterButton = {
@@ -216,7 +220,7 @@ final class ControlPanelView: NSView {
     private static let ringsY: CGFloat = usageTitleY + 24
     private static let ringSize: CGFloat = 50
     private static let rowHeight: CGFloat = 48
-    private static let cardRect = CGRect(x: pad, y: ringsY + ringSize + 50, width: width - 2 * pad, height: 2 * rowHeight)
+    private static let cardRect = CGRect(x: pad, y: ringsY + ringSize + 50, width: width - 2 * pad, height: 3 * rowHeight)
     private static let updateY: CGFloat = cardRect.maxY + 8
     private var separatorY: CGFloat { Self.cardRect.maxY + (model.update == nil ? 12 : 8 + 24 + 8) }
     private var footerY: CGFloat { separatorY + 8 }
@@ -227,6 +231,7 @@ final class ControlPanelView: NSView {
         addSubview(stage)
         addSubview(visibleRow)
         addSubview(notchRow)
+        addSubview(statsRow)
         addSubview(settingsButton)
         addSubview(quitButton)
         addSubview(updateButton)
@@ -234,6 +239,7 @@ final class ControlPanelView: NSView {
         settingsButton.onClick = { [weak self] in self?.onSettings?() }
         visibleRow.onClick = { [weak self] in self?.onToggleVisible?() }
         notchRow.onClick = { [weak self] in self?.onToggleNotch?() }
+        statsRow.onClick = { [weak self] in self?.onStats?() }
         quitButton.onClick = { [weak self] in self?.onQuit?() }
         updateButton.onClick = { [weak self] in self?.onUpdate?() }
         apply()
@@ -255,6 +261,8 @@ final class ControlPanelView: NSView {
             : tr("Aucune encoche sur cet écran", "No notch on this screen")
         notchRow.isEnabled = model.notchAvailable && !model.transitioning
         (notchRow.accessory as! PanelToggle).isOn = model.notch
+        statsRow.title = tr("Statistiques", "Statistics")
+        statsRow.subtitle = model.statsToday.map { tr("Aujourd'hui : ", "Today: ") + $0 } ?? tr("Tokens, modèles et activité", "Tokens, models and activity")
         updateButton.isHidden = model.update == nil
         updateButton.title = model.update ?? ""
         needsLayout = true
@@ -266,6 +274,7 @@ final class ControlPanelView: NSView {
         stage.frame = Self.stageRect
         visibleRow.frame = CGRect(x: Self.cardRect.minX, y: Self.cardRect.minY, width: Self.cardRect.width, height: Self.rowHeight)
         notchRow.frame = visibleRow.frame.offsetBy(dx: 0, dy: Self.rowHeight)
+        statsRow.frame = notchRow.frame.offsetBy(dx: 0, dy: Self.rowHeight)
         // The footer buttons hang off the right edge, their hover plate aligned with the cards' edge.
         let quit = quitButton.fittingSize, settings = settingsButton.fittingSize
         quitButton.frame = CGRect(x: bounds.width - Self.pad - quit.width + 6, y: footerY, width: quit.width, height: quit.height)
@@ -306,11 +315,14 @@ final class ControlPanelView: NSView {
             centered(gauge.note.attributed(.systemFont(ofSize: 10.5), theme.tertiary), x: x + 4, width: column - 8, y: Self.ringsY + Self.ringSize + 24)
         }
 
-        // Quick settings card, a hairline between its two rows.
+        // Quick settings card, hairlines between its rows.
         theme.card.setFill()
         NSBezierPath(roundedRect: Self.cardRect, xRadius: 11, yRadius: 11).fill()
         theme.stroke.setFill()
-        CGRect(x: Self.cardRect.minX + 12, y: Self.cardRect.minY + Self.rowHeight - 0.5, width: Self.cardRect.width - 24, height: 1).fill()
+        for row in 1...2 {
+            CGRect(x: Self.cardRect.minX + 12, y: Self.cardRect.minY + CGFloat(row) * Self.rowHeight - 0.5,
+                   width: Self.cardRect.width - 24, height: 1).fill()
+        }
 
         // Hairline over the footer, full width like a menu's separator.
         theme.stroke.setFill()
@@ -376,9 +388,35 @@ final class ControlPanelView: NSView {
         case "quit": onQuit?()
         case "visible": onToggleVisible?()
         case "notch": onToggleNotch?()
+        case "stats": onStats?()
         case "update": if model.update != nil { onUpdate?() }
         default: break
         }
+    }
+}
+
+/// A row's "opens something" sign: a small chart glyph and a chevron.
+final class ChevronAccessory: NSView {
+    override var fittingSize: NSSize { NSSize(width: 34, height: 16) }
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let theme = PanelTheme.current(effectiveAppearance)
+        // Three bars, the gauges' colors.
+        for (i, h) in [CGFloat(6), 11, 8].enumerated() {
+            PanelTheme.gaugeColors[i].setFill()
+            NSBezierPath(roundedRect: CGRect(x: CGFloat(i) * 5, y: 14 - h, width: 3.5, height: h), xRadius: 1.2, yRadius: 1.2).fill()
+        }
+        let chevron = NSBezierPath()
+        chevron.move(to: CGPoint(x: bounds.width - 5, y: 3.5))
+        chevron.line(to: CGPoint(x: bounds.width - 1.5, y: 8))
+        chevron.line(to: CGPoint(x: bounds.width - 5, y: 12.5))
+        chevron.lineWidth = 1.6
+        chevron.lineCapStyle = .round
+        chevron.lineJoinStyle = .round
+        theme.tertiary.setStroke()
+        chevron.stroke()
     }
 }
 
