@@ -195,6 +195,9 @@ final class SettingsView: NSView {
         var usageStatus = ""
         /// Nil while the source is off.
         var usageHealthy: Bool?
+        /// Claude Code has no usable login: the "Connect Claude Code" row shows.
+        var usageNeedsLogin = false
+        var claudeLogin = ClaudeLogin.State.idle
         var update = UpdateChecker.State.notChecked
         var updateAutomatic = true
         var updateCurrent: String?
@@ -222,6 +225,7 @@ final class SettingsView: NSView {
     var onToggleNotch: (() -> Void)?
     var onToggleLogin: (() -> Void)?
     var onToggleUsageAPI: (() -> Void)?
+    var onClaudeLogin: (() -> Void)?
     var onToggleUpdates: (() -> Void)?
     var onOpenUpdate: (() -> Void)?
     var onCheckUpdatesNow: (() -> Void)?
@@ -237,6 +241,7 @@ final class SettingsView: NSView {
     private let positionRow = SettingRow(accessory: CornerPicker())
     private let loginRow = SettingRow(accessory: PanelToggle())
     private let usageRow = SettingRow(accessory: PanelToggle())
+    private let connectRow = SettingRow(accessory: PanelPillButton(title: "", style: .primary))
     private let updateRow = SettingRow(accessory: PanelToggle())
     /// "Check now", or, once a newer version exists, a button that installs it.
     private let releaseRow = SettingRow(accessory: PanelPillButton(title: "", style: .primary))
@@ -246,7 +251,17 @@ final class SettingsView: NSView {
     private let restoreLatestButton = PanelPillButton(title: "", style: .secondary)
     private var petRows: [SettingRow] { [visibleRow, notchRow, sizeRow, positionRow, loginRow] }
     private var dataRows: [SettingRow] {
-        model.update == .unavailable ? [usageRow, updateRow] : [usageRow, updateRow, releaseRow]
+        (showsConnect ? [usageRow, connectRow] : [usageRow]) + (model.update == .unavailable ? [updateRow] : [updateRow, releaseRow])
+    }
+    /// Only without a usable login, never over one that works: signing in again could switch accounts.
+    /// It stays while a sign-in runs or just failed, and until the quotas come back after one.
+    private var showsConnect: Bool {
+        guard model.usageAPI else { return false }
+        switch model.claudeLogin {
+        case .idle: return model.usageNeedsLogin
+        case .waiting, .failed: return true
+        case .done: return model.usageHealthy != true
+        }
     }
     private let petIcon = SpriteComposer.frame(state: .idle, tool: nil, t: 0, bubble: false)
 
@@ -258,12 +273,14 @@ final class SettingsView: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        (petRows + [usageRow, updateRow, releaseRow]).forEach(addSubview)
+        (petRows + [usageRow, connectRow, updateRow, releaseRow]).forEach(addSubview)
         [installButton, uninstallButton, restoreOriginalButton, restoreLatestButton].forEach(addSubview)
         visibleRow.onClick = { [weak self] in self?.onToggleVisible?() }
         notchRow.onClick = { [weak self] in self?.onToggleNotch?() }
         loginRow.onClick = { [weak self] in self?.onToggleLogin?() }
         usageRow.onClick = { [weak self] in self?.onToggleUsageAPI?() }
+        connectRow.onClick = { [weak self] in self?.onClaudeLogin?() }
+        (connectRow.accessory as! PanelPillButton).onClick = { [weak self] in self?.onClaudeLogin?() }
         updateRow.onClick = { [weak self] in self?.onToggleUpdates?() }
         releaseRow.onClick = { [weak self] in self?.releaseAction() }
         (releaseRow.accessory as! PanelPillButton).onClick = { [weak self] in self?.releaseAction() }
@@ -353,6 +370,7 @@ final class SettingsView: NSView {
             y += row.rowHeight
         }
         releaseRow.isHidden = !dataRows.contains(releaseRow)
+        connectRow.isHidden = !dataRows.contains(connectRow)
 
         let install = installButton.fittingSize
         installButton.frame = CGRect(x: pad + 12, y: l.actionsY + 12, width: max(104, install.width), height: install.height)
@@ -420,6 +438,29 @@ final class SettingsView: NSView {
         usageRow.title = tr("Quotas du compte", "Account quotas")
         usageRow.subtitle = tr("Lus via Claude Code, toutes les 5 min · accès au Trousseau", "Read through Claude Code, every 5 min · Keychain access")
         (usageRow.accessory as! PanelToggle).isOn = m.usageAPI
+        let connect = connectRow.accessory as! PanelPillButton
+        switch m.claudeLogin {
+        case .idle:
+            connectRow.title = tr("Connecter Claude Code", "Connect Claude Code")
+            connectRow.subtitle = tr("Une fois, dans ton navigateur : les quotas s'affichent ensuite", "Once, in your browser: the quotas show up after that")
+            connect.title = tr("Connecter", "Connect")
+            connect.style = .primary
+        case .waiting:
+            connectRow.title = tr("Connexion en cours…", "Signing in…")
+            connectRow.subtitle = tr("Termine la connexion dans ton navigateur", "Finish signing in in your browser")
+            connect.title = tr("Annuler", "Cancel")
+            connect.style = .secondary
+        case .done(let email):
+            connectRow.title = email.map { tr("Connecté : ", "Signed in: ") + $0 } ?? tr("Claude Code est connecté", "Claude Code is signed in")
+            connectRow.subtitle = tr("Lecture des quotas…", "Reading the quotas…")
+            connect.title = tr("Changer", "Switch")
+            connect.style = .secondary
+        case .failed(let message):
+            connectRow.title = tr("Connecter Claude Code", "Connect Claude Code")
+            connectRow.subtitle = message
+            connect.title = tr("Réessayer", "Try again")
+            connect.style = .primary
+        }
 
         updateRow.title = tr("Mises à jour automatiques", "Automatic updates")
         updateRow.subtitle = updateSubtitle()
@@ -561,6 +602,7 @@ final class SettingsView: NSView {
         case "visible": onToggleVisible?()
         case "notch": if notchRow.isEnabled { onToggleNotch?() }
         case "usage": onToggleUsageAPI?()
+        case "claude_login": if !connectRow.isHidden { onClaudeLogin?() }
         case "updates": if updateRow.isEnabled { onToggleUpdates?() }
         case "update_open", "update_check": if !releaseRow.isHidden { releaseAction() }
         case "login": if loginRow.isEnabled { onToggleLogin?() }

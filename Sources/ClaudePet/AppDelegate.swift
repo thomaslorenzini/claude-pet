@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let panel = ControlPanel()
     private let settings = SettingsController()
     private let stats = StatsController(ledger: .shared)
+    private let claudeLogin = ClaudeLogin()
     /// Read when the settings window comes forward and after each action, not on every refresh.
     private var hookStatus: HookSetup.Status?
     private var hookBackups: (original: HookSetup.Backup?, latest: HookSetup.Backup?)
@@ -259,8 +260,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self.refresh()
         }
+        usageAPI.onLoginNeed = { [unowned self] in self.settings.refresh() }
+        claudeLogin.onChange = { [unowned self] in self.settings.refresh() }
+        claudeLogin.onSignedIn = { [unowned self] in self.usageAPI.reload() }
         usageAPI.onUpdate = { [unowned self] five, week in
             self.quotas.offer(five: five, week: week)
+            self.claudeLogin.reset()
             self.refresh()
         }
         usageAPI.start()
@@ -379,6 +384,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot["notch_radius"] = Double(NotchGeometry.bottomRadius)
             snapshot["notch_ear"] = Double(NotchGeometry.earRadius)
             snapshot["tutorial"] = self.tutorial?.stateName ?? NSNull()
+            snapshot["usage_needs_login"] = self.usageAPI.needsLogin
+            snapshot["claude_login"] = {
+                switch self.claudeLogin.state {
+                case .idle: return "idle"
+                case .waiting: return "waiting"
+                case .done: return "done"
+                case .failed: return "failed"
+                }
+            }()
             snapshot["stats"] = self.stats.isOpen
             snapshot["stats_responses"] = TokenLedger.shared.isLoaded ? TokenLedger.shared.entries.count : NSNull()
             snapshot["update"] = self.updates.state.name
@@ -434,6 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         Endpoint.unpublish()
+        claudeLogin.stop()
         TokenLedger.shared.flush(wait: true)
     }
 
@@ -594,6 +609,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             OAuthUsageSource.isEnabled ? self.usageAPI.start() : self.usageAPI.stop()
             self.settings.refresh()
         }
+        view.onClaudeLogin = { [unowned self] in
+            // The same button cancels a sign-in that is waiting for the browser.
+            if self.claudeLogin.state == .waiting { self.claudeLogin.cancel() } else { self.claudeLogin.start() }
+            self.settings.refresh()
+        }
         view.onToggleUpdates = { [unowned self] in
             self.updates.isAutomatic.toggle()
             self.settings.refresh()
@@ -666,6 +686,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.usageAPI = OAuthUsageSource.isEnabled
         m.usageStatus = usageLine()
         m.usageHealthy = OAuthUsageSource.isEnabled ? usageAPI.isUpToDate : nil
+        m.usageNeedsLogin = usageAPI.needsLogin
+        m.claudeLogin = claudeLogin.state
         m.update = updates.state
         m.updateCurrent = updates.currentVersion
         m.updateLastCheck = updates.lastCheck
