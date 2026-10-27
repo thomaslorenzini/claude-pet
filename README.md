@@ -62,6 +62,9 @@ Sessions that were already open only see the hooks after a restart (or after ope
   it gets, wherever it comes from: the pet, the terminal, Desktop.
 - **Shows your usage**: hover the notch to see your 5-hour quota, your weekly quota and the current session's
   context window.
+- **Counts your tokens**: the **Statistics** window (menu bar panel) shows the tokens Claude Code used today, over
+  7 or 30 days or since the beginning, by type (input, output, cache writes, cache reads), model and project, with
+  curves, your busiest hours, streaks and a calendar of active days.
 - **Lives in the notch or floats**: drag it into the notch and out again, or toggle it from the menu bar.
 - **Stays out of the way**: clicks go through it everywhere except on the pet itself, it uses no CPU while asleep and
   under 1 % of one core at its busiest ([measured numbers](#performance)).
@@ -95,9 +98,17 @@ These figures come from my MacBook (Apple M4); expect a bit more on older Macs. 
   reads the login token Claude Code keeps in your Keychain and asks Anthropic's usage endpoint for your quotas every
   5 minutes. The token stays in memory: it is never written, logged or sent anywhere else. When it has expired, the
   app runs `claude -p /usage` so Claude Code renews it itself; this sends no request to the model and uses no quota.
-  This endpoint is not an official API and may stop working at any time.
+  This endpoint is not an official API and may stop working at any time. If Claude Code isn't signed in, **Connect
+  Claude Code** runs `claude auth login`: Claude Code opens its own sign-in page in your browser and stores the
+  login itself (the copy that comes with Claude Desktop works too). The app never sees your password and never
+  writes the token.
 - Without quotas turned on, the gauges still fill in from your status line (CLI sessions) and the session
   transcript (context only).
+- **Statistics** come from the transcripts Claude Code already writes in `~/.claude/projects`, read only, and only
+  once you open the panel or the window. The app keeps the counts it read (time, model, token numbers, session id
+  and project folder name, never the text of a conversation) in
+  `~/Library/Application Support/claude-pet/token-stats.json`, so it doesn't read everything again and older
+  sessions survive Claude Code's cleanup. Delete that file to start over.
 - **Automatic updates** (since 0.2.0, with [Sparkle](https://sparkle-project.org)). Once a day, the app reads a small
   feed attached to the latest GitHub release. A newer version is downloaded in the background and installed when the
   app quits, or right away from **Restart to update** in the menu bar panel. Every update is signed with a private
