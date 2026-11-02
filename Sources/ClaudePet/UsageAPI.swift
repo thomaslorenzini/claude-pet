@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Network
 import Security
 
 /// Subscription quotas from Anthropic's OAuth usage endpoint, the way other usage monitors do it
@@ -41,6 +42,13 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
     private var token: (value: String, expiresAt: Date?)?
     private var timer: Timer?
     private var backoff: TimeInterval = 0
+    /// At login the first fetch often comes before Wi-Fi: its return must not wait for a timer.
+    private var pathMonitor: NWPathMonitor?
+    private var networkUp = true
+    /// The last fetch gave up for lack of network: fetch again as soon as it is back.
+    private var waitingForNetwork = false
+    /// Tests only: replaces the real network state (`POST /control {"usage_network": false}`).
+    private var networkOverride: Bool?
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil
@@ -60,7 +68,31 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
             status = tr("désactivée", "off")
             return
         }
+        if pathMonitor == nil {
+            let monitor = NWPathMonitor()
+            monitor.pathUpdateHandler = { [weak self] path in
+                guard let self, self.networkOverride == nil else { return }
+                self.networkChanged(path.status == .satisfied)
+            }
+            monitor.start(queue: .main)
+            pathMonitor = monitor
+        }
         schedule(after: 2)
+    }
+
+    /// Tests only: pretends the network went down or came back.
+    func simulateNetwork(_ up: Bool) {
+        networkOverride = up
+        networkChanged(up)
+    }
+
+    private func networkChanged(_ up: Bool) {
+        let cameBack = up && !networkUp
+        networkUp = up
+        if cameBack && waitingForNetwork {
+            backoff = 0
+            schedule(after: 1)
+        }
     }
 
     /// Asks Claude Code to renew its token now (`POST /control {"renew_usage_token": true}`), for tests.
@@ -72,6 +104,10 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
     func stop() {
         timer?.invalidate()
         timer = nil
+        // An NWPathMonitor can't be started again once cancelled.
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        waitingForNetwork = false
         token = nil
         needsLogin = false
         status = tr("désactivée", "off")
@@ -102,6 +138,7 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
 
     private func fetch() {
         guard Self.isEnabled else { return }
+        waitingForNetwork = false
         if let token, let expiry = token.expiresAt, expiry < Date() { self.token = nil }
         if token == nil {
             switch Self.readToken() {
@@ -123,12 +160,20 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
         if let expiry = token.expiresAt, expiry < Date() {
             // Not a server failure: no backoff. Let Claude Code renew it, then look at the Keychain again.
             self.token = nil
+            // Without network a renewal can only fail, and would use up its slot for nothing.
+            guard networkUp else {
+                waitingForNetwork = true
+                status = tr("jeton expiré depuis \(QuotaStore.duration(expiry, Date())), en attente du réseau", "token expired \(QuotaStore.duration(expiry, Date())) ago, waiting for the network")
+                schedule(after: Self.expiredRecheck)
+                return
+            }
             status = tr("jeton expiré depuis \(QuotaStore.duration(expiry, Date())), renouvellement par Claude Code…", "token expired \(QuotaStore.duration(expiry, Date())) ago, Claude Code is renewing it…")
             if !CLIRenewal.run(completion: { [weak self] in self?.schedule(after: 1) }) {
                 schedule(after: Self.expiredRecheck)
             }
             return
         }
+        CLIRenewal.tokenIsValid()
         var request = URLRequest(url: Self.url)
         request.httpMethod = "GET"
         request.setValue("Bearer \(token.value)", forHTTPHeaderField: "Authorization")
@@ -142,6 +187,7 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
 
     private func handle(data: Data?, response: HTTPURLResponse?, error: Error?) {
         guard let response else {
+            waitingForNetwork = true
             fail(tr("réseau indisponible", "network unavailable"))
             return
         }
@@ -323,18 +369,31 @@ final class OAuthUsageSource: NSObject, URLSessionTaskDelegate {
 /// The environment is clean on purpose: inherited from a Claude Desktop session, the CLI would use
 /// Desktop's auth instead of its own Keychain login.
 enum CLIRenewal {
-    /// At most one run per 10 minutes, whatever happens.
+    /// At most one run per 10 minutes, apart from one quick retry.
     private static let minInterval: TimeInterval = 10 * 60
+    /// "Network up" doesn't prove the internet answers (DNS not ready at login, captive portal): a run
+    /// that left the token expired gets one retry this soon. Not more: a refused refresh makes Claude
+    /// Code erase its login, so renewals must stay rare.
+    private static let quickRetryInterval: TimeInterval = 60
+    private static var quickRetryLeft = true
     private static var lastRun: Date?
     private static var running = false
+    /// Runs since launch, for tests (`GET /state`: `usage_renewal_runs`).
+    private(set) static var runs = 0
+
+    /// The Keychain holds a valid token again: the next renewal, in an hour or so, starts afresh.
+    static func tokenIsValid() { quickRetryLeft = true }
 
     /// Returns false when nothing was started (already running, too soon, or no `claude` found).
     @discardableResult
     static func run(force: Bool = false, completion: @escaping () -> Void) -> Bool {
-        guard !running, force || lastRun.map({ Date().timeIntervalSince($0) >= minInterval }) ?? true,
+        let elapsed = lastRun.map { Date().timeIntervalSince($0) } ?? .infinity
+        guard !running, force || elapsed >= (quickRetryLeft ? quickRetryInterval : minInterval),
               let claude = ClaudeCodeCLI.executable() else { return false }
+        if elapsed < minInterval { quickRetryLeft = false }
         running = true
         lastRun = Date()
+        runs += 1
         let process = Process()
         process.executableURL = claude
         process.arguments = ["-p", "/usage", "--no-session-persistence", "--settings", #"{"disableAllHooks":true}"#]

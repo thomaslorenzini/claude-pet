@@ -297,6 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let ear = (control["notch_ear"] as? Double).map { CGFloat($0) }
             if radius != nil || ear != nil { self.pet.tuneNotch(radius: radius, ear: ear) }
             if control["renew_usage_token"] as? Bool == true { self.usageAPI.renewNow() }
+            if let up = control["usage_network"] as? Bool { self.usageAPI.simulateNetwork(up) }
             // Tests: checks GitHub now, or pretends it answered this version ("" forgets it).
             if control["check_updates"] as? Bool == true { self.updates.checkInBackground() }
             if control["install_update"] as? Bool == true { self.updates.install() }
@@ -376,6 +377,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             snapshot["shown"] = self.shownDisplay().state.rawValue
             snapshot["quotas"] = self.quotas.snapshot()
             snapshot["usage_api"] = self.usageAPI.status
+            snapshot["usage_renewal_runs"] = CLIRenewal.runs
             snapshot["usage_token_expires_at"] = self.usageAPI.tokenExpiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()
             snapshot["notch"] = self.pet.mode != .floating
             snapshot["login_item"] = LoginItem.state.rawValue
