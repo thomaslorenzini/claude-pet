@@ -72,6 +72,10 @@ struct SessionInfo {
     /// The session's request was answered: a `permission_prompt` reminder arriving now is stale. Unlike
     /// `setAside`, other notifications (an MCP elicitation…) still alert.
     var promptAnswered = false
+    /// Subagents announced by `SubagentStart` and not stopped yet.
+    var runningAgents: Set<String> = []
+    /// `Stop` was the last word of the turn: a background agent ending now must not resume "thinking".
+    var turnOver = false
 }
 
 /// Turns hook events into per-session states, then aggregates them into one display state.
@@ -134,6 +138,14 @@ final class SessionTracker {
     func handle(_ event: [String: Any], now: Date = Date()) {
         let name = event["hook_event_name"] as? String ?? ""
         let id = event["session_id"] as? String ?? "default"
+        let agentID = event["agent_id"] as? String
+
+        // Claude Code's hidden forks (away recap, memory extraction…) fire SubagentStop with no
+        // SubagentStart, even long after Stop. They say nothing about the session: not even activity.
+        if name == "SubagentStop", event["pet_state"] == nil, let agentID,
+           sessions[id]?.runningAgents.contains(agentID) != true {
+            return
+        }
         lastActivity = now
 
         if name == "SessionEnd" {
@@ -176,20 +188,35 @@ final class SessionTracker {
         switch name {
         case "SessionStart":
             set(.idle)
-        case "UserPromptSubmit", "PreCompact":
+        case "UserPromptSubmit":
+            s.turnOver = false
+            set(.thinking)
+        case "PreCompact":
             set(.thinking)
         case "PreToolUse" where toolName == "AskUserQuestion":
             // Claude asks the user a question: it waits for them, like a permission.
+            if agentID == nil { s.turnOver = false }
             set(.waiting)
         case "PreToolUse":
+            // Only the main agent reopens a turn (a Stop hook can make it continue with no new prompt).
+            if agentID == nil { s.turnOver = false }
             set(.working, tool: ToolKind(toolName: toolName ?? ""))
         case "SubagentStart":
+            if let agentID { s.runningAgents.insert(agentID) }
             set(.working, tool: .agent)
-        case "PostToolUse", "SubagentStop":
+        case "SubagentStop":
+            if let agentID { s.runningAgents.remove(agentID) }
+            if !s.turnOver {
+                set(.thinking)
+            } else if s.runningAgents.isEmpty && (s.state == .working || s.state == .thinking) {
+                set(.idle)
+            }
+        case "PostToolUse":
             set(.thinking)
         case "PostToolUseFailure":
             flash(.error, for: Self.errorDuration, then: .thinking)
         case "StopFailure":
+            s.turnOver = true
             flash(.error, for: Self.errorDuration, then: .idle)
         case "PermissionRequest":
             set(.waiting)
@@ -203,6 +230,7 @@ final class SessionTracker {
                 set(.waiting)
             }
         case "Stop":
+            s.turnOver = true
             flash(.happy, for: Self.happyDuration, then: .idle)
         default:
             break
