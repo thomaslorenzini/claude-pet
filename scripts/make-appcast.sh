@@ -1,6 +1,8 @@
 #!/bin/sh
 # Signs build/ClaudePet.dmg for Sparkle and writes build/appcast/appcast.xml, to attach to the release next to
 # the DMG (the app reads releases/latest/download/appcast.xml). Usage: scripts/make-appcast.sh vX.Y.Z [notes.html]
+# Sparkle downloads its own copy of the DMG, sparkle-update.dmg (same bytes): GitHub's download count of
+# ClaudePet.dmg then counts only the people who download the app, not the updates (the site shows it).
 # The private EdDSA key comes from the login Keychain (account "claude-pet"): generate_appcast asks for it.
 # Sparkle's tools: build/sparkle-<version>/bin, from the release that Package.swift pins.
 set -e
@@ -18,12 +20,17 @@ fi
 OUT=build/appcast
 rm -rf "$OUT"
 mkdir -p "$OUT"
-cp build/ClaudePet.dmg "$OUT/ClaudePet.dmg"
+# Named before signing: the enclosure URL is part of the signed feed (SURequireSignedFeed), so it can't be edited after.
+cp build/ClaudePet.dmg "$OUT/sparkle-update.dmg"
 # Same base name as the archive: embedded as the release notes Sparkle shows.
-[ -n "$NOTES" ] && cp "$NOTES" "$OUT/ClaudePet.html"
+[ -n "$NOTES" ] && cp "$NOTES" "$OUT/sparkle-update.html"
 "$TOOLS/generate_appcast" --account claude-pet --embed-release-notes \
   --download-url-prefix "https://github.com/thomaslorenzini/claude-pet/releases/download/$TAG/" "$OUT"
 # The DMG must be the very file that was signed: compare before uploading.
-cmp -s build/ClaudePet.dmg "$OUT/ClaudePet.dmg"
+cmp -s build/ClaudePet.dmg "$OUT/sparkle-update.dmg"
 grep -q 'sparkle-signatures' "$OUT/appcast.xml"
+grep -q "releases/download/$TAG/sparkle-update.dmg" "$OUT/appcast.xml"
 echo "OK : $OUT/appcast.xml ($TAG)"
+echo "Upload, appcast last (it points at sparkle-update.dmg, which must already be there):"
+echo "  gh release upload $TAG build/ClaudePet.dmg '$OUT/sparkle-update.dmg#Automatic update (not for download)'"
+echo "  gh release upload $TAG $OUT/appcast.xml"
