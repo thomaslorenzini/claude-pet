@@ -171,7 +171,6 @@ For scripts and mods, on `127.0.0.1:47319` (the port can change if it's taken, s
 - `POST /event`: a Claude Code hook's JSON as is, or a forced state:
   `{"session_id": "x", "pet_state": "happy", "pet_tool": "bash", "pet_duration": 2}`
   (`pet_state`: `idle|thinking|working|error|waiting|happy|sleeping`; `pet_tool`: `bash|edit|read|web|agent|other`).
-- `POST /control`: `{"notch": true}` moves the pet into the notch (`false` brings it out).
 - `GET /state`: current state and sessions. `GET /health`: is the app running.
 
 ## Contributing

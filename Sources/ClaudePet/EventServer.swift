@@ -23,7 +23,11 @@ final class EventServer {
     /// The asking hook went away before an answer (killed because the user answered elsewhere).
     var onAskCancelled: ((Int) -> Void)?
     /// `POST /control`, e.g. `{"notch": true}`.
+    #if TEST_CONTROL
+    /// Test-only remote control. It can press "Allow" on a permission request, so it is compiled out of
+    /// published builds: any local process could call it (scripts/bundle.sh refuses a binary that has it).
     var onControl: (([String: Any]) -> Void)?
+    #endif
     /// `POST /status`: the Claude Code status line JSON (quotas, context window).
     var onStatus: (([String: Any]) -> Void)?
     /// Called on the main queue.
@@ -170,14 +174,22 @@ final class EventServer {
                 return
             }
             hold(connection, for: object)
-        case ("POST", "/control"), ("POST", "/status"):
+        case ("POST", "/status"):
             guard let object = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any] else {
                 send(status: "400 Bad Request", body: #"{"ok":false,"error":"expected a JSON object"}"#, on: connection)
                 return
             }
-            let handler = request.path == "/status" ? onStatus : onControl
-            DispatchQueue.main.async { handler?(object) }
+            DispatchQueue.main.async { self.onStatus?(object) }
             send(status: "200 OK", body: #"{"ok":true}"#, on: connection)
+        #if TEST_CONTROL
+        case ("POST", "/control"):
+            guard let object = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any] else {
+                send(status: "400 Bad Request", body: #"{"ok":false,"error":"expected a JSON object"}"#, on: connection)
+                return
+            }
+            DispatchQueue.main.async { self.onControl?(object) }
+            send(status: "200 OK", body: #"{"ok":true}"#, on: connection)
+        #endif
         case ("GET", "/state"):
             DispatchQueue.main.async {
                 let state = self.stateProvider?() ?? [:]

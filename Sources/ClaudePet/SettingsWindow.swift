@@ -186,6 +186,8 @@ final class SettingsView: NSView {
         var notch = false
         var notchAvailable = false
         var transitioning = false
+        /// The first-run tutorial can be played again: a notch screen and a visible pet, none running.
+        var tutorialAvailable = false
         var scale = 5
         var login = LoginItem.State.off
         var loginMessage: String?
@@ -224,6 +226,7 @@ final class SettingsView: NSView {
     var onToggleVisible: (() -> Void)?
     var onToggleNotch: (() -> Void)?
     var onToggleLogin: (() -> Void)?
+    var onReplayTutorial: (() -> Void)?
     var onToggleUsageAPI: (() -> Void)?
     var onClaudeLogin: (() -> Void)?
     var onToggleUpdates: (() -> Void)?
@@ -240,6 +243,7 @@ final class SettingsView: NSView {
     private let sizeRow = SettingRow(accessory: SizePicker())
     private let positionRow = SettingRow(accessory: CornerPicker())
     private let loginRow = SettingRow(accessory: PanelToggle())
+    private let tutorialRow = SettingRow(accessory: PanelPillButton(title: "", style: .secondary))
     private let usageRow = SettingRow(accessory: PanelToggle())
     private let connectRow = SettingRow(accessory: PanelPillButton(title: "", style: .primary))
     private let updateRow = SettingRow(accessory: PanelToggle())
@@ -249,7 +253,7 @@ final class SettingsView: NSView {
     private let uninstallButton = PanelPillButton(title: "", style: .secondary)
     private let restoreOriginalButton = PanelPillButton(title: "", style: .secondary)
     private let restoreLatestButton = PanelPillButton(title: "", style: .secondary)
-    private var petRows: [SettingRow] { [visibleRow, notchRow, sizeRow, positionRow, loginRow] }
+    private var petRows: [SettingRow] { [visibleRow, notchRow, sizeRow, positionRow, loginRow, tutorialRow] }
     private var dataRows: [SettingRow] {
         (showsConnect ? [usageRow, connectRow] : [usageRow]) + (model.update == .unavailable ? [updateRow] : [updateRow, releaseRow])
     }
@@ -278,6 +282,8 @@ final class SettingsView: NSView {
         visibleRow.onClick = { [weak self] in self?.onToggleVisible?() }
         notchRow.onClick = { [weak self] in self?.onToggleNotch?() }
         loginRow.onClick = { [weak self] in self?.onToggleLogin?() }
+        tutorialRow.onClick = { [weak self] in self?.replayTutorial() }
+        (tutorialRow.accessory as! PanelPillButton).onClick = { [weak self] in self?.replayTutorial() }
         usageRow.onClick = { [weak self] in self?.onToggleUsageAPI?() }
         connectRow.onClick = { [weak self] in self?.onClaudeLogin?() }
         (connectRow.accessory as! PanelPillButton).onClick = { [weak self] in self?.onClaudeLogin?() }
@@ -435,6 +441,16 @@ final class SettingsView: NSView {
         loginRow.isEnabled = m.login != .unavailable
         (loginRow.accessory as! PanelToggle).isOn = m.login == .on
 
+        tutorialRow.title = tr("Revoir le tutoriel", "Replay the tutorial")
+        tutorialRow.subtitle = m.notchAvailable
+            ? (m.petVisible ? tr("Comment répondre à Claude et déplacer le pet", "How to answer Claude and move the pet")
+                            : tr("Affiche d'abord le pet", "Show the pet first"))
+            : tr("Seulement sur un écran avec encoche", "Only on a screen with a notch")
+        tutorialRow.isEnabled = m.tutorialAvailable
+        let tutorialButton = tutorialRow.accessory as! PanelPillButton
+        tutorialButton.title = tr("Revoir", "Replay")
+        tutorialButton.isEnabled = m.tutorialAvailable
+
         usageRow.title = tr("Quotas du compte", "Account quotas")
         usageRow.subtitle = tr("Lus via Claude Code, toutes les 5 min · accès au Trousseau", "Read through Claude Code, every 5 min · Keychain access")
         (usageRow.accessory as! PanelToggle).isOn = m.usageAPI
@@ -505,6 +521,10 @@ final class SettingsView: NSView {
 
         needsLayout = true
         needsDisplay = true
+    }
+
+    private func replayTutorial() {
+        if model.tutorialAvailable { onReplayTutorial?() }
     }
 
     private func updateSubtitle() -> String {
@@ -606,6 +626,7 @@ final class SettingsView: NSView {
         case "updates": if updateRow.isEnabled { onToggleUpdates?() }
         case "update_open", "update_check": if !releaseRow.isHidden { releaseAction() }
         case "login": if loginRow.isEnabled { onToggleLogin?() }
+        case "tutorial": replayTutorial()
         case "reinstall", "install": installButton.press()
         // First click arms the confirmation, a second one (or "confirm_uninstall") goes through.
         case "uninstall": uninstallButton.press()

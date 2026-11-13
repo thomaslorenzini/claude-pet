@@ -174,7 +174,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startTutorial() {
         guard tutorial == nil, pet.isVisible, let overlay = TutorialOverlay(pet: pet) else { return }
-        overlay.onFinish = { [unowned self] in self.tutorial = nil }
+        overlay.onFinish = { [unowned self] in
+            self.tutorial = nil
+            self.settings.refresh()
+        }
         tutorial = overlay
         overlay.start()
     }
@@ -291,6 +294,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.quotas.handleStatus(status)
             self.refresh()
         }
+        #if TEST_CONTROL
+        // scripts/bundle.sh looks for this exact text to refuse a test build.
+        NSLog("build TEST_CONTROL : /control est actif (jamais dans une version publiée)")
         server.onControl = { [unowned self] control in
             if let notch = control["notch"] as? Bool { self.pet.setNotchMode(notch) }
             let radius = (control["notch_radius"] as? Double).map { CGFloat($0) }
@@ -370,6 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let name = control["hook_update_press"] as? String { self.hookUpdate?.press(name) }
             if let path = control["hook_update_snapshot"] as? String { self.hookUpdate?.snapshot(to: path) }
         }
+        #endif
         server.stateProvider = { [unowned self] in
             var snapshot = self.tracker.snapshot()
             snapshot["port"] = self.server.port.map { Int($0) } ?? NSNull()
@@ -626,6 +633,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.loginMessage = LoginItem.set(LoginItem.state != .on)
             self.settings.refresh()
         }
+        view.onReplayTutorial = { [unowned self] in
+            // The overlay dims every screen: the settings window would sit in the dark under it.
+            self.settings.close()
+            self.startTutorial()
+        }
         view.onScale = { [unowned self] in
             self.pet.setScale($0)
             self.settings.refresh()
@@ -677,6 +689,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.notch = pet.wantsNotch
         m.notchAvailable = pet.notchAvailable
         m.transitioning = pet.isTransitioning
+        m.tutorialAvailable = pet.notchAvailable && pet.isVisible && !pet.isTransitioning && tutorial == nil
         m.scale = pet.scale
         if pet.mode == .floating, let screen = pet.panel.screen ?? NSScreen.main {
             let area = screen.visibleFrame, frame = pet.panel.frame

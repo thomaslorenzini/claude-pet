@@ -1,10 +1,11 @@
 #!/bin/zsh
 # CPU and memory of Claude Pet per state, on a dev instance (port 47400) that hooks never reach.
-#   scripts/measure-cpu.sh [binary]     (default: .build/release/ClaudePet)
+#   scripts/measure-cpu.sh [binary]     (default: .build/test-control/release/ClaudePet, from
+#   scripts/build-test-release.sh: a release build that keeps the test-only /control)
 # Each state: mean CPU % and idle wakeups/s from top, 6 × 5 s. The "mouse moving" case moves the real
 # cursor for 30 s with synthetic events.
 cd "$(dirname "$0")/.."
-BIN=${1:-.build/release/ClaudePet}
+BIN=${1:-.build/test-control/release/ClaudePet}
 MOVE=.build/tools/move-mouse
 [ -x $MOVE ] || { mkdir -p .build/tools && swiftc -O -o $MOVE scripts/tools/move-mouse.swift; }
 while lsof -nP -iTCP:47400 -sTCP:LISTEN >/dev/null; do sleep 0.3; done

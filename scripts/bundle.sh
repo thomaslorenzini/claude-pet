@@ -2,6 +2,7 @@
 # Builds a release binary and wraps it in build/ClaudePet.app (LSUIElement: no Dock icon).
 # Version: $VERSION if set, else the latest vX.Y.Z tag, else 0.1.0. The build number is the commit count,
 # so it always grows. $BUNDLE_ID only for update tests (an app that never shares the real one's settings).
+# TEST_CONTROL=1 (update tests only, never with the real identifier) keeps the test-only POST /control.
 # Sparkle checks updates against SUPublicEDKey: the matching private key is in Thomas's Keychain
 # (account "claude-pet"), never in this repository.
 set -e
@@ -13,8 +14,19 @@ VERSION=${VERSION:-0.1.0}
 BUILD=${BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}
 BUNDLE_ID=${BUNDLE_ID:-fr.thomaslorenzini.claude-pet}
 FEED=https://github.com/thomaslorenzini/claude-pet/releases/latest/download/appcast.xml
-swift build -c release
-BIN=$(swift build -c release --show-bin-path)
+if [ "$TEST_CONTROL" = 1 ]; then
+  # Any local process could press "Allow" through /control: never in an app with the real identifier.
+  if [ "$BUNDLE_ID" = fr.thomaslorenzini.claude-pet ]; then
+    echo "TEST_CONTROL=1 needs a test BUNDLE_ID, never the real one." >&2; exit 1
+  fi
+  BUILD_FLAGS="-Xswiftc -DTEST_CONTROL --build-path .build/test-control"
+fi
+swift build -c release $BUILD_FLAGS
+BIN=$(swift build -c release $BUILD_FLAGS --show-bin-path)
+# The marker is logged only by a build that has /control (AppDelegate.swift).
+if [ "$TEST_CONTROL" != 1 ] && LC_ALL=C grep -qa "build TEST_CONTROL" "$BIN/ClaudePet"; then
+  echo "This binary has the test-only /control endpoint: refusing to bundle it." >&2; exit 1
+fi
 APP=build/ClaudePet.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
